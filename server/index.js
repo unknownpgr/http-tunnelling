@@ -6,11 +6,14 @@ const CLIENT_PORT = 81;
 const DOMAIN = "tunnel.unknownpgr.com";
 const subdomains = {};
 
-function getUrl() {
-  let subdomain;
-  do subdomain = crypto.randomBytes(8).toString("hex");
-  while (subdomain in subdomains);
-  return [subdomain, `https://${subdomain}.${DOMAIN}`];
+function getUrl(id) {
+  // Generate subdomain from md5 hash of ip and port
+  const hash = crypto.createHash("md5");
+  hash.update(id);
+  const subdomain = hash.digest("hex").slice(0, 8);
+
+  // Return the subdomain and the url
+  return [subdomain, `http://${subdomain}.${DOMAIN}`];
 }
 
 const clientServer = net.createServer(async (socket) => {
@@ -18,24 +21,35 @@ const clientServer = net.createServer(async (socket) => {
     `New connection from ${socket.remoteAddress}:${socket.remotePort} to ${socket.localAddress}:${socket.localPort}`
   );
 
-  const [subdomain, url] = getUrl();
-  subdomains[subdomain] = socket;
-  socket.write(url + "|");
+  let isInitialized = false;
 
-  function onClose() {
-    console.log(
-      `Connection from ${socket.remoteAddress}:${socket.remotePort} closed`
-    );
-    delete subdomains[subdomain];
-  }
+  socket.on("data", (data) => {
+    if (isInitialized) return;
+    const text = data.toString();
+    console.log("ClientId: ", text);
 
-  socket.on("close", onClose);
-  socket.on("error", (err) => {
-    console.log(
-      `Connection from ${socket.remoteAddress}:${socket.remotePort} error`
-    );
-    console.log(err);
-    onClose();
+    // Notice that socket.remoteAddress and socket.remotePort identifies the client.
+    const [subdomain, url] = getUrl(text);
+    subdomains[subdomain] = socket;
+    socket.write(url + "|");
+
+    function onClose() {
+      console.log(
+        `Connection from ${socket.remoteAddress}:${socket.remotePort} closed`
+      );
+      delete subdomains[subdomain];
+    }
+
+    socket.on("close", onClose);
+    socket.on("error", (err) => {
+      console.log(
+        `Connection from ${socket.remoteAddress}:${socket.remotePort} error`
+      );
+      console.log(err);
+      onClose();
+    });
+
+    isInitialized = true;
   });
 });
 
@@ -43,20 +57,21 @@ clientServer.listen(CLIENT_PORT, () => {
   console.log("Client server listening on port CLIENT_PORT");
 });
 
-const userServer = net.createServer(async (socket) => {
+const userServer = net.createServer(async (userSocket) => {
   console.log(
-    `New user connection from ${socket.remoteAddress}:${socket.remotePort} to ${socket.localAddress}:${socket.localPort}`
+    `New user connection from ${userSocket.remoteAddress}:${userSocket.remotePort} to ${userSocket.localAddress}:${userSocket.localPort}`
   );
 
-  socket.on("data", (data) => {
+  userSocket.on("data", (data) => {
     // Convert data to string
     const text = data.toString();
 
     // Parse the data and check if data is valid http request
     const [method, path] = text.split(" ");
     if (method !== "GET" || !path.startsWith("/")) {
-      socket.write("HTTP/1.1 400 Bad Request\r\n\r\n");
-      socket.end();
+      console.log("Invalid request");
+      userSocket.write("HTTP/1.1 400 Bad Request\r\n\r\n");
+      userSocket.end();
       return;
     }
 
@@ -70,8 +85,9 @@ const userServer = net.createServer(async (socket) => {
 
     // Check if the request is valid
     if (headers.Host === undefined) {
-      socket.write("HTTP/1.1 400 Bad Request\r\n\r\n");
-      socket.end();
+      console.log("No host header");
+      userSocket.write("HTTP/1.1 400 Bad Request\r\n\r\n");
+      userSocket.end();
       return;
     }
 
@@ -80,8 +96,9 @@ const userServer = net.createServer(async (socket) => {
 
     // Check if the subdomain is valid
     if (!(subdomain in subdomains)) {
-      socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
-      socket.end();
+      console.log(`Subdomain ${subdomain} not found`);
+      userSocket.write("HTTP/1.1 404 Not Found\r\n\r\n");
+      userSocket.end();
       return;
     }
 
@@ -92,12 +109,14 @@ const userServer = net.createServer(async (socket) => {
     clientSocket.write(text);
 
     // Pipe the socket to the client sockets
-    socket.pipe(clientSocket);
-    clientSocket.pipe(socket);
+    userSocket.pipe(clientSocket);
+    clientSocket.pipe(userSocket);
 
-    // Close client socket when socket is closed
-    socket.on("close", () => {
-      clientSocket.end();
+    clientSocket.on("close", () => {
+      console.log("Client socket closed");
+      userSocket.unpipe(clientSocket);
+      clientSocket.unpipe(userSocket);
+      userSocket.end();
     });
   });
 });
