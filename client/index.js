@@ -2,7 +2,7 @@ const net = require("net");
 const crypto = require("crypto");
 
 // Get application address and server address from command line arguments
-const [applicationAddr, serverAddr] = process.argv.slice(2);
+const [applicationAddr] = process.argv.slice(2);
 
 function parseAddress(addr) {
   const [ip, port] = addr.split(":");
@@ -10,7 +10,7 @@ function parseAddress(addr) {
   return [ip, portNumber];
 }
 
-const [serverIp, serverPort] = parseAddress(serverAddr);
+const [serverIp, serverPort] = parseAddress("server.unknownpgr.com:81");
 const [applicationIp, applicationPort] = parseAddress(applicationAddr);
 
 // Generate a random id for this client
