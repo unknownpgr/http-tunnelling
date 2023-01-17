@@ -56,3 +56,6 @@ const client = net.createConnection(serverPort, serverIp, () => {
     }
   });
 });
+
+// This script can be run with the following command:
+// curl https://raw.githubusercontent.com/unknownpgr/http-tunnuling/master/client/index.js | node - example.com tunneling.server.unknownpgr.com

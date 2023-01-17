@@ -2,6 +2,7 @@
 const crypto = require("crypto");
 const net = require("net");
 
+const CLIENT_PORT = 81;
 const DOMAIN = "tunnel.server.unknownpgr.com";
 const subdomains = {};
 
@@ -38,8 +39,8 @@ const clientServer = net.createServer(async (socket) => {
   });
 });
 
-clientServer.listen(3000, () => {
-  console.log("Client server listening on port 3000");
+clientServer.listen(CLIENT_PORT, () => {
+  console.log("Client server listening on port CLIENT_PORT");
 });
 
 const userServer = net.createServer(async (socket) => {
@@ -97,6 +98,6 @@ const userServer = net.createServer(async (socket) => {
   });
 });
 
-userServer.listen(3001, () => {
-  console.log("User server listening on port 3001");
+userServer.listen(80, () => {
+  console.log("User server listening on port 80");
 });
