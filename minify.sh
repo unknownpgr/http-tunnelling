@@ -1,0 +1,1 @@
+npx -y uglify-js client/index.js -o client.min.js
