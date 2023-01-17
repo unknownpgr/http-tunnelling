@@ -3,7 +3,7 @@ const crypto = require("crypto");
 const net = require("net");
 
 const CLIENT_PORT = 81;
-const DOMAIN = "tunnel.server.unknownpgr.com";
+const DOMAIN = "tunnel.unknownpgr.com";
 const subdomains = {};
 
 function getUrl() {
@@ -44,6 +44,10 @@ clientServer.listen(CLIENT_PORT, () => {
 });
 
 const userServer = net.createServer(async (socket) => {
+  console.log(
+    `New user connection from ${socket.remoteAddress}:${socket.remotePort} to ${socket.localAddress}:${socket.localPort}`
+  );
+
   socket.on("data", (data) => {
     // Convert data to string
     const text = data.toString();
