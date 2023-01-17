@@ -18,4 +18,4 @@ curl https://raw.githubusercontent.com/unknownpgr/http-tunnelling/master/client.
 
 or
 
-docker run -it --rm unknownpgr/http-tunnelling:latest example.com
+docker run -it --rm unknownpgr/tunnelling:latest example.com
