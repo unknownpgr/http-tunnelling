@@ -11,3 +11,7 @@ HTTP 기반 터널링을 할 수 있는 서버 및 클라이언트를 제작한�
 ## Server
 
 서버는 두 개의 포트를 개방한다. 하나는 API와 접속을 위한 포트, 다른 하나는 TCP 커넥션을 위한 포트다.
+
+## Usage
+
+curl https://raw.githubusercontent.com/unknownpgr/http-tunnelling/master/client.min.js | node - example.com tunneling.server.unknownpgr.com:81
