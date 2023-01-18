@@ -13,7 +13,7 @@ function getUrl(id) {
   const subdomain = hash.digest("hex").slice(0, 8);
 
   // Return the subdomain and the url
-  return [subdomain, `http://${subdomain}.${DOMAIN}`];
+  return [subdomain, `https://${subdomain}.${DOMAIN}`];
 }
 
 const clientServer = net.createServer(async (socket) => {

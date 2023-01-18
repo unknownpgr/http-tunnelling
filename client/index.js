@@ -30,6 +30,12 @@ function join(socket) {
     socket.on("close", () => {
       resolve();
     });
+
+    socket.on("error", (err) => {
+      console.log("Client error");
+      console.log(err);
+      resolve();
+    });
   });
 }
 
@@ -37,12 +43,9 @@ async function main() {
   while (true) {
     const client = await connect({ port: serverPort, host: serverIp });
     client.write(clientId);
-
     console.log(`Connected to ${serverIp}:${serverPort}`);
 
-    let isInitialized = false;
     let application;
-
     function connectToApplication() {
       if (application) return;
 
@@ -50,28 +53,44 @@ async function main() {
         console.log(`Connected to application`);
       });
 
-      application.pipe(client);
-      client.pipe(application);
-
       application.on("close", () => {
         console.log(`Disconnected from application`);
-        client.unpipe(application);
         application = null;
+      });
+
+      application.on("error", (err) => {
+        console.log("Application error");
+        console.log(err);
+        application = null;
+      });
+
+      application.on("data", (data) => {
+        client.write(data);
       });
     }
 
+    // Very simple two-state state machine.
+    let isInitialized = false;
+
     client.on("data", (data) => {
+      // Notice that this function is idempotent.
       connectToApplication();
-      const text = data.toString();
       if (!isInitialized) {
-        const [url, others] = text.split("|");
-        console.log(url);
+        let url = "";
+        for (let i = 0; i < data.length; i++) {
+          if (data[i] === 124) break;
+          url += String.fromCharCode(data[i]);
+        }
+        const others = data.slice(url.length + 1);
+        console.log("Url: ", url);
         if (others) application.write(others);
         isInitialized = true;
-        return;
+      } else {
+        application.write(data);
       }
     });
 
+    // Wait until client is closed
     await join(client);
   }
 }
