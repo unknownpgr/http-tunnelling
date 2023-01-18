@@ -26,7 +26,7 @@ function connect(options) {
 }
 
 function join(socket) {
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve) => {
     socket.on("close", () => {
       resolve();
     });
@@ -88,6 +88,11 @@ async function main() {
       } else {
         application.write(data);
       }
+    });
+
+    client.on("error", (err) => {
+      console.log("Client error");
+      console.log(err);
     });
 
     // Wait until client is closed

@@ -16,34 +16,34 @@ function getUrl(id) {
   return [subdomain, `https://${subdomain}.${DOMAIN}`];
 }
 
-const clientServer = net.createServer(async (socket) => {
+const clientServer = net.createServer(async (clientSocket) => {
   console.log(
-    `New connection from ${socket.remoteAddress}:${socket.remotePort} to ${socket.localAddress}:${socket.localPort}`
+    `New connection from ${clientSocket.remoteAddress}:${clientSocket.remotePort} to ${clientSocket.localAddress}:${clientSocket.localPort}`
   );
 
   let isInitialized = false;
 
-  socket.on("data", (data) => {
+  clientSocket.on("data", (data) => {
     if (isInitialized) return;
     const text = data.toString();
     console.log("ClientId: ", text);
 
     // Notice that socket.remoteAddress and socket.remotePort identifies the client.
     const [subdomain, url] = getUrl(text);
-    subdomains[subdomain] = socket;
-    socket.write(url + "|");
+    subdomains[subdomain] = clientSocket;
+    clientSocket.write(url + "|");
 
     function onClose() {
       console.log(
-        `Connection from ${socket.remoteAddress}:${socket.remotePort} closed`
+        `Connection from ${clientSocket.remoteAddress}:${clientSocket.remotePort} closed`
       );
       delete subdomains[subdomain];
     }
 
-    socket.on("close", onClose);
-    socket.on("error", (err) => {
+    clientSocket.on("close", onClose);
+    clientSocket.on("error", (err) => {
       console.log(
-        `Connection from ${socket.remoteAddress}:${socket.remotePort} error`
+        `Connection from ${clientSocket.remoteAddress}:${clientSocket.remotePort} error`
       );
       console.log(err);
       onClose();
@@ -73,7 +73,11 @@ const userServer = net.createServer(async (userSocket) => {
 
       // Parse the data and check if data is valid http request
       const [method, path] = text.split(" ");
-      if (method !== "GET" || !path.startsWith("/")) {
+      // Check if method is valid http method
+      if (
+        !["GET", "POST", "PUT", "DELETE"].includes(method) ||
+        !path.startsWith("/")
+      ) {
         console.log("Invalid request");
         userSocket.write("HTTP/1.1 400 Bad Request\r\n\r\n");
         userSocket.end();
@@ -111,6 +115,8 @@ const userServer = net.createServer(async (userSocket) => {
       clientSocket = subdomains[subdomain];
 
       clientSocket.on("data", (data) => {
+        console.log("Client socket data");
+        console.log(data.toString());
         userSocket.write(data);
       });
 
