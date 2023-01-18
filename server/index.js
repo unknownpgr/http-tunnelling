@@ -62,62 +62,68 @@ const userServer = net.createServer(async (userSocket) => {
     `New user connection from ${userSocket.remoteAddress}:${userSocket.remotePort} to ${userSocket.localAddress}:${userSocket.localPort}`
   );
 
+  let subdomain = null;
+  let clientSocket = null;
+
   userSocket.on("data", (data) => {
-    // Convert data to string
-    const text = data.toString();
+    // If subdomain is not set, parse the request and get the subdomain
+    if (!subdomain) {
+      // Convert data to string
+      const text = data.toString();
 
-    // Parse the data and check if data is valid http request
-    const [method, path] = text.split(" ");
-    if (method !== "GET" || !path.startsWith("/")) {
-      console.log("Invalid request");
-      userSocket.write("HTTP/1.1 400 Bad Request\r\n\r\n");
-      userSocket.end();
-      return;
+      // Parse the data and check if data is valid http request
+      const [method, path] = text.split(" ");
+      if (method !== "GET" || !path.startsWith("/")) {
+        console.log("Invalid request");
+        userSocket.write("HTTP/1.1 400 Bad Request\r\n\r\n");
+        userSocket.end();
+        return;
+      }
+
+      // Parse http header
+      const headers = {};
+      const lines = text.split("\r\n");
+      for (let i = 1; i < lines.length; i++) {
+        const [key, value] = lines[i].split(": ");
+        headers[key] = value;
+      }
+
+      // Check if the request is valid
+      if (headers.Host === undefined) {
+        console.log("No host header");
+        userSocket.write("HTTP/1.1 400 Bad Request\r\n\r\n");
+        userSocket.end();
+        return;
+      }
+
+      // Get the subdomain from the host
+      const _subdomain = headers.Host.split(".")[0];
+
+      // Check if the subdomain is valid
+      if (!(_subdomain in subdomains)) {
+        console.log(`Subdomain ${_subdomain} not found`);
+        userSocket.write("HTTP/1.1 404 Not Found\r\n\r\n");
+        userSocket.end();
+        return;
+      }
+
+      subdomain = _subdomain;
+      clientSocket = subdomains[subdomain];
+
+      clientSocket.on("data", (data) => {
+        userSocket.write(data);
+      });
+
+      clientSocket.on("error", (err) => {
+        console.log("Client socket error");
+        console.log(err);
+        userSocket.end();
+      });
     }
 
-    // Parse http header
-    const headers = {};
-    const lines = text.split("\r\n");
-    for (let i = 1; i < lines.length; i++) {
-      const [key, value] = lines[i].split(": ");
-      headers[key] = value;
-    }
-
-    // Check if the request is valid
-    if (headers.Host === undefined) {
-      console.log("No host header");
-      userSocket.write("HTTP/1.1 400 Bad Request\r\n\r\n");
-      userSocket.end();
-      return;
-    }
-
-    // Get the subdomain from the host
-    const subdomain = headers.Host.split(".")[0];
-
-    // Check if the subdomain is valid
-    if (!(subdomain in subdomains)) {
-      console.log(`Subdomain ${subdomain} not found`);
-      userSocket.write("HTTP/1.1 404 Not Found\r\n\r\n");
-      userSocket.end();
-      return;
-    }
-
-    // Get the socket from the subdomain
-    const clientSocket = subdomains[subdomain];
-
+    if (clientSocket === null) return;
     // Send the request to the client
-    clientSocket.write(text);
-
-    // Pipe the socket to the client sockets
-    userSocket.pipe(clientSocket);
-    clientSocket.pipe(userSocket);
-
-    clientSocket.on("close", () => {
-      console.log("Client socket closed");
-      userSocket.unpipe(clientSocket);
-      clientSocket.unpipe(userSocket);
-      userSocket.end();
-    });
+    clientSocket.write(data);
   });
 });
 
