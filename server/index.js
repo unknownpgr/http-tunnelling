@@ -64,8 +64,7 @@ function sendToClient(client, userId, data) {
   const buffer = Buffer.alloc(8 + data.length);
   buffer.writeUInt32BE(userId, 0);
   buffer.writeUInt32BE(data.length, 4);
-  data.copy(buffer, 8);
-
+  buffer.set(data, 8);
   client.write(buffer);
 }
 
@@ -100,7 +99,7 @@ const clientServer = net.createServer(async (clientSocket) => {
     if (userSocket) {
       userSocket.write(payload);
     } else {
-      console.log("User socket not found");
+      console.log(`User socket ${id} not found`);
     }
   });
 });
@@ -155,6 +154,7 @@ const userServer = net.createServer(async (userSocket) => {
 
   // Register the user socket
   const userId = getUniqueId();
+  console.log("Assign user id: ", userId);
   userSockets[userId] = userSocket;
 
   // Remove all on data listeners

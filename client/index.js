@@ -96,25 +96,17 @@ async function main() {
       continue;
     }
 
-    // Consider data before '|' appear as url
-    let url = "";
-    let i = 0;
-    for (; i < clientData.length; i++) {
-      if (clientData[i] === 124) {
-        break;
-      }
-      url += String.fromCharCode(clientData[i]);
-    }
+    const url = clientData.toString();
     console.log("Url: ", url);
 
     // Remove every on data listener
     client.removeAllListeners("data");
 
     // Listen for data from server. Data is format of
-    // id (4 bytes) | length (4 bytes) | data
+    // id (4 bytes, integer) | length (4 bytes) | data
 
     client.on("data", async (data) => {
-      const id = data.slice(0, 4).toString("hex");
+      const id = data.slice(0, 4).readUInt32BE();
       const length = data.slice(4, 8).readUInt32BE();
       const content = data.slice(8, 8 + length);
 
@@ -137,9 +129,9 @@ async function main() {
         socket.on("data", (data) => {
           // Write data in format of id (4 bytes) | length (4 bytes) | data
           const buffer = Buffer.alloc(8 + data.length);
-          buffer.write(id, 0, 4, "hex");
+          buffer.writeUint32BE(id, 0);
           buffer.writeUInt32BE(data.length, 4);
-          data.copy(buffer, 8);
+          buffer.set(data, 8);
           client.write(buffer);
         });
 
