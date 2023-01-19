@@ -27,6 +27,8 @@ function connect(options) {
 
 function join(socket) {
   return new Promise((resolve) => {
+    console.log("Joining...");
+
     socket.on("close", () => {
       resolve();
     });
@@ -39,63 +41,122 @@ function join(socket) {
   });
 }
 
+function getSocketReader(socket) {
+  let callback = null;
+  let buffer = Buffer.alloc(0);
+  let isClosed = false;
+
+  socket.on("data", (data) => {
+    buffer = Buffer.concat([buffer, data]);
+    if (callback) {
+      callback(buffer);
+      buffer = Buffer.alloc(0);
+      callback = null;
+    }
+  });
+
+  // If socket is closed or error occurs, throw an error
+  socket.on("close", () => {
+    isClosed = true;
+  });
+
+  socket.on("error", (err) => {
+    isClosed = true;
+  });
+
+  return () => {
+    return new Promise((resolve) => {
+      if (buffer.length > 0) {
+        const data = buffer;
+        buffer = Buffer.alloc(0);
+        resolve(data);
+      } else if (isClosed) {
+        resolve(null);
+      } else {
+        callback = resolve;
+      }
+    });
+  };
+}
+
+const sockets = {};
+
 async function main() {
   while (true) {
     const client = await connect({ port: serverPort, host: serverIp });
-    client.write(clientId);
     console.log(`Connected to ${serverIp}:${serverPort}`);
+    const read = getSocketReader(client);
 
-    let application;
-    function connectToApplication() {
-      if (application) return;
+    client.write(clientId);
+    const clientData = await read();
 
-      application = net.createConnection(applicationPort, applicationIp, () => {
-        console.log(`Connected to application`);
-      });
-
-      application.on("close", () => {
-        console.log(`Disconnected from application`);
-        application = null;
-      });
-
-      application.on("error", (err) => {
-        console.log("Application error");
-        console.log(err);
-        application = null;
-      });
-
-      application.on("data", (data) => {
-        client.write(data);
-      });
+    // If clientData is null, it means that the server is closed
+    if (clientData === null) {
+      console.log("Server is closed");
+      continue;
     }
 
-    // Very simple two-state state machine.
-    let isInitialized = false;
+    // Consider data before '|' appear as url
+    let url = "";
+    let i = 0;
+    for (; i < clientData.length; i++) {
+      if (clientData[i] === 124) {
+        break;
+      }
+      url += String.fromCharCode(clientData[i]);
+    }
+    console.log("Url: ", url);
 
-    client.on("data", (data) => {
-      // Notice that this function is idempotent.
-      connectToApplication();
-      if (!isInitialized) {
-        let url = "";
-        for (let i = 0; i < data.length; i++) {
-          if (data[i] === 124) break;
-          url += String.fromCharCode(data[i]);
-        }
-        const others = data.slice(url.length + 1);
-        console.log("Url: ", url);
-        if (others) application.write(others);
-        isInitialized = true;
+    // Remove every on data listener
+    client.removeAllListeners("data");
+
+    // Listen for data from server. Data is format of
+    // id (4 bytes) | length (4 bytes) | data
+
+    client.on("data", async (data) => {
+      const id = data.slice(0, 4).toString("hex");
+      const length = data.slice(4, 8).readUInt32BE();
+      const content = data.slice(8, 8 + length);
+
+      if (sockets[id]) {
+        sockets[id].write(content);
       } else {
-        application.write(data);
+        // Create new socket to application
+        const socket = await connect({
+          port: applicationPort,
+          host: applicationIp,
+        });
+
+        // Save the socket
+        sockets[id] = socket;
+
+        // Send data to application
+        socket.write(content);
+
+        // Listen for data from application
+        socket.on("data", (data) => {
+          // Write data in format of id (4 bytes) | length (4 bytes) | data
+          const buffer = Buffer.alloc(8 + data.length);
+          buffer.write(id, 0, 4, "hex");
+          buffer.writeUInt32BE(data.length, 4);
+          data.copy(buffer, 8);
+          client.write(buffer);
+        });
+
+        // Error handling
+        socket.on("error", (err) => {
+          console.log("Application error");
+          console.log(err);
+          delete sockets[id];
+        });
+
+        // Close socket when application closes
+        socket.on("close", () => {
+          delete sockets[id];
+        });
       }
     });
 
-    client.on("error", (err) => {
-      console.log("Client error");
-      console.log(err);
-    });
-
-    // Wait until client is closed
     await join(client);
   }
 }
