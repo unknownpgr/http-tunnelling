@@ -1,1 +1,1 @@
-npx -y uglify-js client/index.js -m -c -o client.min.js
+npx -y uglify-js client/index.js -m toplevel -c -o client.min.js

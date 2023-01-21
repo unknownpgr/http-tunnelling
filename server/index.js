@@ -1,227 +1,205 @@
-// Create a TCP socket server
-const crypto = require("crypto");
 const net = require("net");
+const crypto = require("crypto");
 
-const CLIENT_PORT = 81;
-const DOMAIN = "tunnel.unknownpgr.com";
-const clientSockets = {};
-const userSockets = {};
-
-function getUrl(id) {
-  // Generate subdomain from md5 hash of ip and port
-  const hash = crypto.createHash("md5");
-  hash.update(id);
-  const subdomain = hash.digest("hex").slice(0, 8);
-
-  // Return the subdomain and the url
-  return [subdomain, `https://${subdomain}.${DOMAIN}`];
+function abstractSend(socket, type, id, data) {
+  let buffer;
+  if (data) buffer = Buffer.alloc(9 + data.length);
+  else buffer = Buffer.alloc(9);
+  buffer.writeUInt8(type, 0);
+  buffer.writeUInt32BE(id, 1);
+  if (data) {
+    buffer.writeUInt32BE(data.length, 5);
+    data.copy(buffer, 9);
+  } else {
+    buffer.writeUInt32BE(0, 5);
+  }
+  socket.write(buffer);
 }
 
-function getSocketReader(socket) {
-  let callback = null;
+function sendData(socket, id, data) {
+  abstractSend(socket, 0, id, data);
+}
+
+function sendLog(socket, id, data) {
+  abstractSend(socket, 3, id, data);
+}
+
+function sendClose(socket, id) {
+  abstractSend(socket, 1, id, Buffer.alloc(0));
+}
+
+function getDataParser() {
   let buffer = Buffer.alloc(0);
-  let isClosed = false;
 
-  socket.on("data", (data) => {
+  return (data) => {
     buffer = Buffer.concat([buffer, data]);
-    if (callback) {
-      callback(buffer);
-      buffer = Buffer.alloc(0);
-      callback = null;
-    }
-  });
 
-  // If socket is closed or error occurs, throw an error
-  socket.on("close", () => {
-    isClosed = true;
-    if (callback) {
-      callback(null);
-    }
-  });
+    const frames = [];
 
-  socket.on("error", (err) => {
-    isClosed = true;
-    if (callback) {
-      callback(null);
-    }
-  });
-
-  return () => {
-    return new Promise((resolve) => {
-      if (buffer.length > 0) {
-        const data = buffer;
-        buffer = Buffer.alloc(0);
-        resolve(data);
-      } else if (isClosed) {
-        resolve(null);
-      } else {
-        callback = resolve;
+    while (buffer.length >= 9) {
+      const type = buffer.readUInt8(0);
+      const id = buffer.readUInt32BE(1);
+      const length = buffer.readUInt32BE(5);
+      if (buffer.length < 9 + length) {
+        break;
       }
-    });
+      const data = buffer.subarray(9, 9 + length);
+      buffer = buffer.subarray(9 + length);
+      frames.push({ type, id, data });
+    }
+
+    return frames;
   };
 }
 
+const CLIENT_PORT = 81;
+
+// Server URL
+function getServerUrl(subdomain) {
+  return `https://${subdomain}.tunnel.unknownpgr.com`;
+}
+
+// Create random subdomain
+function getRandomSubdomain() {
+  return crypto.randomBytes(4).toString("hex");
+}
+
+// Create Uid
 let counter = 0;
-function getUniqueId() {
+function createUid() {
   return counter++;
 }
 
-function sendToClient(client, userId, data) {
-  // Data format is: id (4 bytes) | length (4 bytes) | data
-  const buffer = Buffer.alloc(8 + data.length);
-  buffer.writeUInt32BE(userId, 0);
-  buffer.writeUInt32BE(data.length, 4);
-  data.copy(buffer, 8);
-  client.write(buffer);
-}
+// Dictionary of clients
 
-const clientServer = net.createServer(async (clientSocket) => {
-  console.log(
-    `New client connection from ${clientSocket.remoteAddress}:${clientSocket.remotePort}`
-  );
+const workers = {};
 
-  const read = getSocketReader(clientSocket);
+// Dictionary of users
 
-  const clientData = await read();
+const users = {};
 
-  if (clientData === null) {
-    console.log("Client disconnected");
-    return;
-  }
+// Create a server for worker
 
-  const clientId = clientData.toString();
-  const [subdomain, url] = getUrl(clientId);
-  clientSockets[subdomain] = clientSocket;
-  clientSocket.write(url);
-  console.log(`Assign subdomain ${subdomain} to client ${clientId}`);
+const workerServer = net.createServer((socket) => {
+  // Get the subdomain of the worker
+  const id = getRandomSubdomain();
 
-  // Structure of data is id (4 bytes, integer) | length (4 bytes, integer) | data
-  let buffer = Buffer.alloc(0);
-  let id = -1;
-  let length = -1;
-  while (true) {
-    const data = await read();
+  // Add the worker to the dictionary
+  workers[id] = socket;
+  users[id] = {};
 
-    console.log(".");
+  // Log the worker
+  console.log("Worker connected: " + id);
 
-    if (data === null) {
-      console.log("Client disconnected");
-      return;
+  // Send url from subdomain to the worker
+  sendLog(socket, id, Buffer.from(getServerUrl(id)));
+
+  // Remove the worker from the dictionary when it is closed
+  socket.on("close", () => {
+    console.log("Worker disconnected: " + id);
+    delete workers[id];
+    for (const userId in users[id]) {
+      users[id][userId].destroy();
     }
+  });
 
-    buffer = Buffer.concat([buffer, data]);
-    while (buffer.length >= 8) {
-      if (id === -1) {
-        id = buffer.readUInt32BE(0);
-        length = buffer.readUInt32BE(4);
-        buffer = buffer.subarray(8);
-      }
+  // Remove the worker from the dictionary when an error occurs
+  socket.on("error", () => {
+    console.log("Worker disconnected: " + id);
+    delete workers[id];
+    for (const userId in users[id]) {
+      users[id][userId].destroy();
+    }
+  });
 
-      if (buffer.length >= length) {
-        const data = buffer.subarray(0, length);
-        buffer = buffer.subarray(length);
+  const parser = getDataParser();
 
-        if (data.toString() === "close") {
-          console.log(`Close user socket ${id} from client`);
-          userSockets[id].end();
-          delete userSockets[id];
-        } else if (userSockets[id]) {
-          userSockets[id].write(data);
-        } else {
-          console.log("User socket not found");
+  // Listen for data from the worker
+  socket.on("data", (data) => {
+    const frames = parser(data);
+    for (const frame of frames) {
+      const { type, id: uid, data } = frame;
+      console.log(type, uid, data.length);
+      if (type === 0) {
+        // Data
+        if (users[id] && users[id][uid]) users[id][uid].write(data);
+      } else if (type === 1) {
+        // Close
+        if (users[id] && users[id][uid]) {
+          users[id][uid].end();
         }
-
-        id = -1;
-        length = -1;
+      } else if (type === 2) {
+        // Cannot send create from worker
+      } else if (type === 3) {
+        // Log
+        console.log(data.toString());
       } else {
-        break;
+        console.log("Unknown type: " + type);
       }
     }
-  }
+  });
 });
 
 const userServer = net.createServer(async (userSocket) => {
-  console.log(
-    `New user connection from ${userSocket.remoteAddress}:${userSocket.remotePort} to ${userSocket.localAddress}:${userSocket.localPort}`
-  );
+  let subdomain = null;
+  let uid = createUid();
 
-  const read = getSocketReader(userSocket);
+  // Listen for data from the user
+  userSocket.on("data", (data) => {
+    if (!subdomain) {
+      // Get the subdomain of the user
+      const httpRequest = data.toString();
 
-  const data = await read();
+      // Parse http request and get headers
+      const lines = httpRequest.split("\n").map((x) => x.trim());
+      const headers = lines.slice(1).reduce((acc, line) => {
+        const [key, value] = line.split(": ");
+        acc[key] = value;
+        return acc;
+      }, {});
 
-  const text = data.toString();
+      console.log(headers);
 
-  const [method, path] = text.split(" ");
-  if (
-    !["GET", "POST", "PUT", "DELETE"].includes(method) ||
-    !path.startsWith("/")
-  ) {
-    console.log("Invalid request");
-    userSocket.write("HTTP/1.1 400 Bad Request\r\n\r\n");
-    userSocket.end();
-    return;
-  }
+      // Check if the host is valid.
+      if (!headers.Host || !headers.Host.includes(".")) {
+        console.log("Invalid host");
+        userSocket.write("HTTP/1.1 400 Bad Request\r\n\r\n");
+        userSocket.end();
+        return;
+      }
 
-  // Parse http header
-  const headers = {};
-  const lines = text.split("\r\n");
-  for (let i = 1; i < lines.length; i++) {
-    const [key, value] = lines[i].split(": ");
-    headers[key] = value;
-  }
+      // Get the subdomain from the host
+      subdomain = headers.Host.split(".")[0];
 
-  // Check if the request is valid
-  if (headers.Host === undefined) {
-    console.log("No host header");
-    userSocket.write("HTTP/1.1 400 Bad Request\r\n\r\n");
-    userSocket.end();
-    return;
-  }
+      // Check if the subdomain is valid
+      if (!workers[subdomain]) {
+        console.log("Invalid subdomain");
+        userSocket.write("HTTP/1.1 400 Bad Request\r\n\r\n");
+        userSocket.end();
+        return;
+      }
 
-  // Get the subdomain from the host
-  const subdomain = headers.Host.split(".")[0];
+      users[subdomain][uid] = userSocket;
 
-  // Check if the subdomain is valid
-  if (!(subdomain in clientSockets)) {
-    console.log(`Subdomain ${subdomain} not found`);
-    userSocket.write("HTTP/1.1 404 Not Found\r\n\r\n");
-    userSocket.end();
-    return;
-  }
+      userSocket.on("close", () => {
+        // Send close to the worker
+        if (workers[subdomain]) sendClose(workers[subdomain], uid);
+        delete users[subdomain][uid];
+      });
 
-  // Register the user socket
-  const userId = getUniqueId();
-  console.log("Assign user id: ", userId);
-  userSockets[userId] = userSocket;
-
-  // Remove all on data listeners
-  userSocket.removeAllListeners("data");
-
-  // Send the request to the client
-  sendToClient(clientSockets[subdomain], userId, data);
-  console.log(`Send request to client with subdomain ${subdomain}`);
-
-  while (true) {
-    const data = await read();
-    if (data === null) {
-      console.log(`User ${userId} disconnected`);
-      sendToClient(clientSockets[subdomain], userId, Buffer.from("close"));
-      return;
+      userSocket.on("error", () => {
+        if (workers[subdomain]) sendClose(workers[subdomain], uid);
+        delete users[subdomain][uid];
+      });
     }
 
-    if (!(subdomain in clientSockets)) {
-      console.log(`Subdomain ${subdomain} not found`);
-      userSocket.write("HTTP/1.1 502 Bad Gateway\r\n\r\n");
-      userSocket.end();
-      return;
-    }
-
-    sendToClient(clientSockets[subdomain], userId, data);
-  }
+    // Send data to the worker
+    sendData(workers[subdomain], uid, data);
+  });
 });
 
-clientServer.listen(CLIENT_PORT, () => {
-  console.log("Client server listening on port CLIENT_PORT");
+workerServer.listen(CLIENT_PORT, () => {
+  console.log("Client server listening on port " + CLIENT_PORT);
 });
 
 userServer.listen(80, () => {
