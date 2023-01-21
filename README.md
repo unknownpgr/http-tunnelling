@@ -15,7 +15,7 @@ HTTP 기반 터널링을 할 수 있는 서버 및 클라이언트를 제작한�
 ## Usage
 
 ```bash
-curl https://raw.githubusercontent.com/unknownpgr/http-tunnelling/master/client.min.js -q | node - localhost:8080
+curl https://raw.githubusercontent.com/unknownpgr/http-tunnelling/master/dist/client.js -q | node - example.com 8080
 ```
 
 or
@@ -34,12 +34,21 @@ Multiplexer 구현이 불완전하여 오류가 많이 발생하는 것으로 �
 - Multiplexer는 Client의 socket을 생성하거나 데이터를 보내거나, socket을 종료한다.
 - 이를 위해 간단한 프로토콜을 작성할 필요가 있다.
 - 프로토콜은 다음과 같은 구조의 프레임을 교환한다.
-  - `type` - `0` is data, `1` is close, `2` is create, `3` is log.
-  - `id` - ID of the stream. This is used to identify the socket.
-  - `length` - Length of the data. This is only used when `type` is `0` or `3`.
-  - `data` - Data of the frame. This is only used when `type` is `0` or `3`.
-- This will be serialized as follows.
-  - `type` - 1 byte
-  - `id` - 4 byte
-  - `length` - 4 byte
-  - `data` - `length` byte
+
+```text
++-----------------+-----------------+-----------------+-----------------+
+| 1 byte          | 4 bytes         | 4 bytes         | N bytes         |
++-----------------+-----------------+-----------------+-----------------+
+| frame type      | stream id       | data  length    |  data           |
++-----------------+-----------------+-----------------+-----------------+
+```
+
+- frame type은 다음과 같은 종류가 있다.
+
+  - `0x01`: 데이터 프레임
+  - `0x02`: 연결 프레임
+  - `0x04`: 로그 프레임
+
+- stream id는 4바이트 정수로, 각 연결마다 고유한 id를 가진다.
+- data length는 4바이트 정수로, data의 길이를 나타낸다.
+- data는 data length만큼의 바이트로, 데이터를 나타낸다.

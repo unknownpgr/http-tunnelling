@@ -1,3 +1,5 @@
+import net from "net";
+
 const TYPE_DATA = 0x01;
 const TYPE_CLOSE = 0x02;
 const TYPE_LOG = 0x04;
@@ -8,44 +10,38 @@ const NUMBER_TO_TYPE = {
   [TYPE_LOG]: "log",
 };
 
-function send(socket, type, id, data) {
-  // Define buffer
-  let buffer;
-  if (data) buffer = Buffer.alloc(9 + data.length);
-  else buffer = Buffer.alloc(9);
+type Frame = {
+  type: number;
+  id: number;
+  data: Buffer;
+};
 
-  // Write to buffer
-  buffer.writeUInt8(type, 0);
-  buffer.writeUInt32BE(id, 1);
-  if (data) {
-    buffer.writeUInt32BE(data.length, 5);
-    data.copy(buffer, 9);
-  } else {
-    buffer.writeUInt32BE(0, 5);
-  }
-
-  // Send buffer
-  socket.write(buffer);
+function send(socket: net.Socket, type: number, id?: number, data?: Buffer) {
+  const header = Buffer.alloc(9);
+  header.writeUInt8(type, 0);
+  header.writeUInt32BE(id || 0, 0);
+  header.writeUInt32BE(data?.length || 0, 5);
+  socket.write(Buffer.concat([header, data || Buffer.alloc(0)]));
 }
 
-function sendData(socket, id, data) {
+function sendData(socket: net.Socket, id: number, data: Buffer) {
   send(socket, TYPE_DATA, id, data);
 }
 
-function sendLog(socket, data) {
+function sendLog(socket: net.Socket, data: Buffer) {
   send(socket, TYPE_LOG, 0, data);
 }
 
-function sendClose(socket, id) {
+function sendClose(socket: net.Socket, id: number) {
   send(socket, TYPE_CLOSE, id);
 }
 
 function getReader() {
   let buffer = Buffer.alloc(0);
 
-  return (data) => {
+  return (data: Buffer) => {
     buffer = Buffer.concat([buffer, data]);
-    const frames = [];
+    const frames: Frame[] = [];
 
     while (buffer.length >= 9) {
       const type = buffer.readUInt8(0);
@@ -64,14 +60,13 @@ function getReader() {
 }
 
 // Export the functions and type constants
-module.exports = {
-  sendData,
-  sendLog,
-  sendClose,
-  getReader,
-
+export {
   TYPE_DATA,
   TYPE_CLOSE,
   TYPE_LOG,
   NUMBER_TO_TYPE,
+  sendData,
+  sendLog,
+  sendClose,
+  getReader,
 };

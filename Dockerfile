@@ -2,6 +2,6 @@ FROM node:18
 
 WORKDIR /app
 
-ADD ./client.min.js ./index.js
+ADD ./dist/client.js ./client.js
 
-ENTRYPOINT [ "node", "index.js" ]
+ENTRYPOINT [ "node", "client.js" ]

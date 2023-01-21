@@ -1,6 +1,6 @@
-const net = require("net");
-const crypto = require("crypto");
-const {
+import net from "net";
+import crypto from "crypto";
+import {
   sendLog,
   sendData,
   sendClose,
@@ -8,12 +8,12 @@ const {
   TYPE_CLOSE,
   TYPE_LOG,
   getReader,
-} = require("./lib");
+} from "./lib";
 
 const CLIENT_PORT = 81;
 
 // Server URL
-function getServerUrl(subdomain) {
+function getServerUrl(subdomain: string) {
   return `https://${subdomain}.tunnel.unknownpgr.com`;
 }
 
@@ -29,14 +29,16 @@ function createUid() {
 }
 
 // Test if the data is a valid HTTP request and return subdomain
-function getSubdomainFromRequest(data) {
+function getSubdomainFromRequest(data: Buffer) {
   const httpRequest = data.toString();
   const lines = httpRequest.split("\n").map((x) => x.trim());
-  const headers = lines.slice(1).reduce((acc, line) => {
-    const [key, value] = line.split(": ");
-    acc[key] = value;
-    return acc;
-  }, {});
+  const headers: { [_: string]: string } = lines
+    .slice(1)
+    .reduce((acc, line) => {
+      const [key, value] = line.split(": ");
+      acc[key] = value;
+      return acc;
+    }, {} as { [_: string]: string });
 
   if (!headers.Host || !headers.Host.includes(".")) {
     return null;
@@ -47,10 +49,10 @@ function getSubdomainFromRequest(data) {
 }
 
 // Dictionary of clients
-const workers = {};
+const workers: { [_: string]: net.Socket } = {};
 
 // Dictionary of users
-const users = {};
+const users: { [_: string]: { [_: number]: net.Socket } } = {};
 
 // Create a server for worker
 const workerServer = net.createServer((socket) => {
@@ -100,7 +102,7 @@ const workerServer = net.createServer((socket) => {
 });
 
 const userServer = net.createServer(async (userSocket) => {
-  let subdomain = null;
+  let subdomain: string | null = null;
   let uid = createUid();
 
   // Listen for data from the user
@@ -117,10 +119,11 @@ const userServer = net.createServer(async (userSocket) => {
 
       users[subdomain][uid] = userSocket;
 
-      function onDisconnect() {
+      const onDisconnect = () => {
+        if (!subdomain) return;
         if (workers[subdomain]) sendClose(workers[subdomain], uid);
         delete users[subdomain][uid];
-      }
+      };
 
       userSocket.on("close", onDisconnect);
       userSocket.on("error", onDisconnect);

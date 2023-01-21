@@ -1,4 +1,4 @@
-const net = require("net");
+import net from "net";
 const {
   sendData,
   sendClose,
@@ -20,14 +20,14 @@ const [applicationHost, applicationPort] = applicationUrl.split(":");
 const applicationPortNumber = applicationPort ? parseInt(applicationPort) : 80;
 
 const read = getReader();
-const sockets = {};
+const sockets: { [_: number]: net.Socket } = {};
 
 async function main() {
   while (true) {
     console.log("Connecting to server");
     const client = net.createConnection(serverPort, serverHost);
 
-    function createSocket(id) {
+    const createSocket = (id: number) => {
       const socket = net.createConnection(
         applicationPortNumber,
         applicationHost,
@@ -46,7 +46,7 @@ async function main() {
       });
 
       sockets[id] = socket;
-    }
+    };
 
     client.on("data", (_data) => {
       const frames = read(_data);
