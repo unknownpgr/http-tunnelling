@@ -158,8 +158,6 @@ const userServer = net.createServer(async (userSocket) => {
         return acc;
       }, {});
 
-      console.log(headers);
-
       // Check if the host is valid.
       if (!headers.Host || !headers.Host.includes(".")) {
         console.log("Invalid host");
