@@ -3,6 +3,7 @@ import net from "net";
 const TYPE_DATA = 0x01;
 const TYPE_CLOSE = 0x02;
 const TYPE_LOG = 0x04;
+const TYPE_REGISTER = 0x08;
 
 const NUMBER_TO_TYPE = {
   [TYPE_DATA]: "data",
@@ -19,9 +20,13 @@ type Frame = {
 function send(socket: net.Socket, type: number, id?: number, data?: Buffer) {
   const header = Buffer.alloc(9);
   header.writeUInt8(type, 0);
-  header.writeUInt32BE(id || 0, 0);
+  header.writeUInt32BE(id || 0, 1);
   header.writeUInt32BE(data?.length || 0, 5);
   socket.write(Buffer.concat([header, data || Buffer.alloc(0)]));
+}
+
+function register(socket: net.Socket, id: Buffer) {
+  send(socket, TYPE_REGISTER, 0, id);
 }
 
 function sendData(socket: net.Socket, id: number, data: Buffer) {
@@ -64,9 +69,11 @@ export {
   TYPE_DATA,
   TYPE_CLOSE,
   TYPE_LOG,
+  TYPE_REGISTER,
   NUMBER_TO_TYPE,
   sendData,
   sendLog,
   sendClose,
+  register,
   getReader,
 };

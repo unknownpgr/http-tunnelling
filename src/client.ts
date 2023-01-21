@@ -1,12 +1,14 @@
+import crypto from "crypto";
 import net from "net";
-const {
-  sendData,
-  sendClose,
+import {
   getReader,
-  TYPE_DATA,
+  register,
+  sendClose,
+  sendData,
   TYPE_CLOSE,
+  TYPE_DATA,
   TYPE_LOG,
-} = require("./lib");
+} from "./lib";
 
 // Connect to server
 const serverHost = "tunnel.unknownpgr.com";
@@ -22,10 +24,14 @@ const applicationPortNumber = applicationPort ? parseInt(applicationPort) : 80;
 const read = getReader();
 const sockets: { [_: number]: net.Socket } = {};
 
+const ID = crypto.randomBytes(32);
+
 async function main() {
   while (true) {
     console.log("Connecting to server");
     const client = net.createConnection(serverPort, serverHost);
+
+    register(client, ID);
 
     const createSocket = (id: number) => {
       const socket = net.createConnection(
@@ -57,16 +63,12 @@ async function main() {
         if (type === TYPE_DATA) {
           if (!sockets[id]) createSocket(id);
           sockets[id].write(data);
-        }
-
-        if (type === TYPE_CLOSE) {
+        } else if (type === TYPE_CLOSE) {
           if (sockets[id]) {
             sockets[id].end();
             delete sockets[id];
           }
-        }
-
-        if (type === TYPE_LOG) {
+        } else if (type === TYPE_LOG) {
           console.log(data.toString());
         }
       }

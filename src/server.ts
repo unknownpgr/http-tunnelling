@@ -8,6 +8,7 @@ import {
   TYPE_CLOSE,
   TYPE_LOG,
   getReader,
+  TYPE_REGISTER,
 } from "./lib";
 
 const CLIENT_PORT = 81;
@@ -17,9 +18,15 @@ function getServerUrl(subdomain: string) {
   return `https://${subdomain}.tunnel.unknownpgr.com`;
 }
 
-// Create random subdomain
-function getRandomSubdomain() {
-  return crypto.randomBytes(4).toString("hex");
+// Create subdomain
+const salt = "CIadLOjDL7QguYCPwbKlVHkvc58FzwcgYT3uc2pgDG1wAoQzuhjEj4FCjQ";
+function getSubdomain(data: Buffer) {
+  return crypto
+    .createHash("sha256")
+    .update(data)
+    .update(salt)
+    .digest("hex")
+    .slice(0, 8);
 }
 
 // Create Uid
@@ -56,18 +63,10 @@ const users: { [_: string]: { [_: number]: net.Socket } } = {};
 
 // Create a server for worker
 const workerServer = net.createServer((socket) => {
-  // Get the subdomain of the worker
-  const id = getRandomSubdomain();
-
-  // Add the worker to the dictionary
-  workers[id] = socket;
-  users[id] = {};
+  let id: string | null = null;
 
   // Log the worker
-  console.log("Worker connected: " + id);
-
-  // Send the server URL to the worker
-  sendLog(socket, Buffer.from(getServerUrl(id)));
+  console.log("Worker connected");
 
   function onDisconnect() {
     console.log("Worker disconnected: " + id);
@@ -88,7 +87,13 @@ const workerServer = net.createServer((socket) => {
     const frames = read(data);
     for (const frame of frames) {
       const { type, id: uid, data } = frame;
-      if (type === TYPE_DATA) {
+      if (type === TYPE_REGISTER) {
+        id = getSubdomain(data);
+        console.log("Worker registered: " + id);
+        workers[id] = socket;
+        users[id] = {};
+        sendLog(socket, Buffer.from(getServerUrl(id)));
+      } else if (type === TYPE_DATA) {
         if (users[id] && users[id][uid]) users[id][uid].write(data);
       } else if (type === TYPE_CLOSE) {
         if (users[id] && users[id][uid]) users[id][uid].end();
@@ -111,7 +116,7 @@ const userServer = net.createServer(async (userSocket) => {
       subdomain = getSubdomainFromRequest(data);
 
       if (!subdomain || !workers[subdomain]) {
-        console.log("Bar Request");
+        console.log("Bad Request");
         userSocket.write("HTTP/1.1 400 Bad Request\r\n\r\n");
         userSocket.end();
         return;
