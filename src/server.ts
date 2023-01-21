@@ -26,7 +26,7 @@ function getSubdomain(data: Buffer) {
     .update(data)
     .update(salt)
     .digest("hex")
-    .slice(0, 8);
+    .slice(0, 16);
 }
 
 // Create Uid
