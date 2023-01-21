@@ -6,13 +6,13 @@
 ## Usage
 
 ```bash
-curl https://raw.githubusercontent.com/unknownpgr/http-tunnelling/master/dist/client.js -q | node - example.com 8080
+curl -s https://tunnel.unknownpgr.com/client.js | node - 127.0.0.1:8080
 ```
 
 or
 
 ```bash
-docker run -it --rm unknownpgr/tunnelling:latest example.com
+docker run -it --rm unknownpgr/tunnelling:latest 127.0.0.1:8080
 ```
 
 ## How it works
