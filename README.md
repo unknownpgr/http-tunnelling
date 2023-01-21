@@ -15,7 +15,7 @@ HTTP 기반 터널링을 할 수 있는 서버 및 클라이언트를 제작한�
 ## Usage
 
 ```bash
-curl https://raw.githubusercontent.com/unknownpgr/http-tunnelling/master/client.min.js -q | node - example.com
+curl https://raw.githubusercontent.com/unknownpgr/http-tunnelling/master/client.min.js -q | node - localhost:8080
 ```
 
 or
