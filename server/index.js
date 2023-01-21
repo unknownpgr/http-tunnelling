@@ -20,13 +20,29 @@ function getUrl(id) {
 function getSocketReader(socket) {
   let callback = null;
   let buffer = Buffer.alloc(0);
+  let isClosed = false;
 
   socket.on("data", (data) => {
+    buffer = Buffer.concat([buffer, data]);
     if (callback) {
-      callback(data);
+      callback(buffer);
+      buffer = Buffer.alloc(0);
       callback = null;
-    } else {
-      buffer = Buffer.concat([buffer, data]);
+    }
+  });
+
+  // If socket is closed or error occurs, throw an error
+  socket.on("close", () => {
+    isClosed = true;
+    if (callback) {
+      callback(null);
+    }
+  });
+
+  socket.on("error", (err) => {
+    isClosed = true;
+    if (callback) {
+      callback(null);
     }
   });
 
@@ -36,6 +52,8 @@ function getSocketReader(socket) {
         const data = buffer;
         buffer = Buffer.alloc(0);
         resolve(data);
+      } else if (isClosed) {
+        resolve(null);
       } else {
         callback = resolve;
       }
@@ -48,23 +66,12 @@ function getUniqueId() {
   return counter++;
 }
 
-function handleFinish(socket) {
-  socket.on("close", () => {
-    console.log("Socket closed");
-  });
-
-  socket.on("error", (err) => {
-    console.log("Socket error");
-    console.log(err);
-  });
-}
-
 function sendToClient(client, userId, data) {
   // Data format is: id (4 bytes) | length (4 bytes) | data
   const buffer = Buffer.alloc(8 + data.length);
   buffer.writeUInt32BE(userId, 0);
   buffer.writeUInt32BE(data.length, 4);
-  buffer.set(data, 8);
+  data.copy(buffer, 8);
   client.write(buffer);
 }
 
@@ -76,32 +83,61 @@ const clientServer = net.createServer(async (clientSocket) => {
   const read = getSocketReader(clientSocket);
 
   const clientData = await read();
-  const clientId = clientData.toString();
-  console.log("ClientId: ", clientId);
 
+  if (clientData === null) {
+    console.log("Client disconnected");
+    return;
+  }
+
+  const clientId = clientData.toString();
   const [subdomain, url] = getUrl(clientId);
   clientSockets[subdomain] = clientSocket;
-  clientSocket.write(url + "|");
+  clientSocket.write(url);
+  console.log(`Assign subdomain ${subdomain} to client ${clientId}`);
 
-  // Remove all on data listeners
-  clientSocket.removeAllListeners("data");
+  // Structure of data is id (4 bytes, integer) | length (4 bytes, integer) | data
+  let buffer = Buffer.alloc(0);
+  let id = -1;
+  let length = -1;
+  while (true) {
+    const data = await read();
 
-  // Handle the client socket
-  handleFinish(clientSocket);
+    console.log(".");
 
-  clientSocket.on("data", (data) => {
-    // Data format is: id (4 bytes) | length (4 bytes) | data
-    const id = data.subarray(0, 4).readUInt32BE();
-    const length = data.subarray(4, 8).readUInt32BE();
-    const payload = data.subarray(8, 8 + length);
-
-    const userSocket = userSockets[id];
-    if (userSocket) {
-      userSocket.write(payload);
-    } else {
-      console.log(`User socket ${id} not found`);
+    if (data === null) {
+      console.log("Client disconnected");
+      return;
     }
-  });
+
+    buffer = Buffer.concat([buffer, data]);
+    while (buffer.length >= 8) {
+      if (id === -1) {
+        id = buffer.readUInt32BE(0);
+        length = buffer.readUInt32BE(4);
+        buffer = buffer.subarray(8);
+      }
+
+      if (buffer.length >= length) {
+        const data = buffer.subarray(0, length);
+        buffer = buffer.subarray(length);
+
+        if (data.toString() === "close") {
+          console.log(`Close user socket ${id} from client`);
+          userSockets[id].end();
+          delete userSockets[id];
+        } else if (userSockets[id]) {
+          userSockets[id].write(data);
+        } else {
+          console.log("User socket not found");
+        }
+
+        id = -1;
+        length = -1;
+      } else {
+        break;
+      }
+    }
+  }
 });
 
 const userServer = net.createServer(async (userSocket) => {
@@ -112,6 +148,7 @@ const userServer = net.createServer(async (userSocket) => {
   const read = getSocketReader(userSocket);
 
   const data = await read();
+
   const text = data.toString();
 
   const [method, path] = text.split(" ");
@@ -160,14 +197,18 @@ const userServer = net.createServer(async (userSocket) => {
   // Remove all on data listeners
   userSocket.removeAllListeners("data");
 
-  // Handle the user socket
-  handleFinish(userSocket);
-
   // Send the request to the client
   sendToClient(clientSockets[subdomain], userId, data);
+  console.log(`Send request to client with subdomain ${subdomain}`);
 
-  userSocket.on("data", (data) => {
-    // If client socket is not found, send 502 Bad Gateway and close the socket
+  while (true) {
+    const data = await read();
+    if (data === null) {
+      console.log(`User ${userId} disconnected`);
+      sendToClient(clientSockets[subdomain], userId, Buffer.from("close"));
+      return;
+    }
+
     if (!(subdomain in clientSockets)) {
       console.log(`Subdomain ${subdomain} not found`);
       userSocket.write("HTTP/1.1 502 Bad Gateway\r\n\r\n");
@@ -175,9 +216,8 @@ const userServer = net.createServer(async (userSocket) => {
       return;
     }
 
-    // Send the data to the client
     sendToClient(clientSockets[subdomain], userId, data);
-  });
+  }
 });
 
 clientServer.listen(CLIENT_PORT, () => {

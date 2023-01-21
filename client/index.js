@@ -20,28 +20,26 @@ const clientId = crypto.randomBytes(36).toString("hex");
 function connect(options) {
   return new Promise((resolve, reject) => {
     const socket = net.connect(options, () => {
+      socket.removeAllListeners("error");
       resolve(socket);
     });
-  });
-}
-
-function join(socket) {
-  return new Promise((resolve) => {
-    console.log("Joining...");
-
-    socket.on("close", () => {
-      resolve();
-    });
-
     socket.on("error", (err) => {
-      console.log("Client error");
-      console.log(err);
-      resolve();
+      resolve(null);
     });
   });
 }
 
 function getSocketReader(socket) {
+  /**
+   * This function will return a function that will return a promise.
+   *
+   * The promise will resolve when there is data in the socket.
+   *
+   * If the socket is closed, the promise will resolve with null.
+   *
+   * If the error occurs, the promise will resolve with null.
+   */
+
   let callback = null;
   let buffer = Buffer.alloc(0);
   let isClosed = false;
@@ -58,10 +56,16 @@ function getSocketReader(socket) {
   // If socket is closed or error occurs, throw an error
   socket.on("close", () => {
     isClosed = true;
+    if (callback) {
+      callback(null);
+    }
   });
 
   socket.on("error", (err) => {
     isClosed = true;
+    if (callback) {
+      callback(null);
+    }
   });
 
   return () => {
@@ -79,11 +83,26 @@ function getSocketReader(socket) {
   };
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
 const sockets = {};
 
 async function main() {
   while (true) {
     const client = await connect({ port: serverPort, host: serverIp });
+
+    // If client is null, it means that the server is closed
+    if (client === null) {
+      console.log("Server is closed");
+      console.log("Reconnecting in 5 seconds");
+      await sleep(5000);
+      continue;
+    }
+
     console.log(`Connected to ${serverIp}:${serverPort}`);
     const read = getSocketReader(client);
 
@@ -99,57 +118,100 @@ async function main() {
     const url = clientData.toString();
     console.log("Url: ", url);
 
-    // Remove every on data listener
-    client.removeAllListeners("data");
-
     // Listen for data from server. Data is format of
     // id (4 bytes, integer) | length (4 bytes) | data
 
-    client.on("data", async (data) => {
-      const id = data.slice(0, 4).readUInt32BE();
-      const length = data.slice(4, 8).readUInt32BE();
-      const content = data.slice(8, 8 + length);
+    let buffer = Buffer.alloc(0);
+    let tmpId = -1;
+    let length = -1;
 
-      if (sockets[id]) {
-        sockets[id].write(content);
-      } else {
-        // Create new socket to application
-        const socket = await connect({
-          port: applicationPort,
-          host: applicationIp,
-        });
+    while (true) {
+      const data = await read();
+      if (data === null) {
+        console.log("Server is closed");
 
-        // Save the socket
-        sockets[id] = socket;
+        // Destroy all sockets
+        for (const id in sockets) {
+          sockets[id].destroy();
+        }
 
-        // Send data to application
-        socket.write(content);
-
-        // Listen for data from application
-        socket.on("data", (data) => {
-          // Write data in format of id (4 bytes) | length (4 bytes) | data
-          const buffer = Buffer.alloc(8 + data.length);
-          buffer.writeUint32BE(id, 0);
-          buffer.writeUInt32BE(data.length, 4);
-          buffer.set(data, 8);
-          client.write(buffer);
-        });
-
-        // Error handling
-        socket.on("error", (err) => {
-          console.log("Application error");
-          console.log(err);
-          delete sockets[id];
-        });
-
-        // Close socket when application closes
-        socket.on("close", () => {
-          delete sockets[id];
-        });
+        break;
       }
-    });
+      console.log(".");
 
-    await join(client);
+      buffer = Buffer.concat([buffer, data]);
+
+      if (tmpId === -1 && buffer.length >= 4) {
+        tmpId = buffer.readUInt32BE(0);
+        buffer = buffer.subarray(4);
+      }
+
+      if (length === -1 && buffer.length >= 4) {
+        length = buffer.readUInt32BE(0);
+        buffer = buffer.subarray(4);
+      }
+
+      if (tmpId !== -1 && length !== -1 && buffer.length >= length) {
+        const data = buffer.subarray(0, length);
+        buffer = buffer.subarray(length);
+        const id = tmpId;
+        tmpId = -1;
+        length = -1;
+
+        if (data.toString() === "close") {
+          if (sockets[id]) {
+            console.log(`-${id}`);
+            sockets[id].destroy();
+            delete sockets[id];
+          }
+          continue;
+        }
+
+        // If there is no socket for this _id, create a new one
+        if (!sockets[id]) {
+          console.log(`+${id}`);
+          // Log the length of the sockets object
+          console.log("Sockets: ", Object.keys(sockets).length);
+          sockets[id] = net.connect(
+            { port: applicationPort, host: applicationIp },
+            () => {
+              sockets[id].write(data);
+
+              let timeoutTimer = -1;
+
+              // Listen for data from application
+              sockets[id].on("data", (data) => {
+                const buffer = Buffer.alloc(4 + 4 + data.length);
+                buffer.writeUInt32BE(id, 0);
+                buffer.writeUInt32BE(data.length, 4);
+                data.copy(buffer, 8);
+                client.write(buffer);
+
+                if (timeoutTimer !== -1) {
+                  clearTimeout(timeoutTimer);
+                }
+                timeoutTimer = setTimeout(() => {
+                  console.log("Timeout");
+                  sockets[id].destroy();
+                  delete sockets[id];
+                }, 10000);
+              });
+
+              sockets[id].on("close", () => {
+                // If the socket is closed, send "close" to server
+                const buffer = Buffer.alloc(4 + 4 + 5);
+                buffer.writeUInt32BE(id, 0);
+                buffer.writeUInt32BE(5, 4);
+                buffer.write("close", 8);
+                client.write(buffer);
+              });
+            }
+          );
+        } else {
+          sockets[id].write(data);
+        }
+      }
+    }
   }
 }
 
