@@ -36,10 +36,7 @@ async function main() {
     const createSocket = (id: number) => {
       const socket = net.createConnection(
         applicationPortNumber,
-        applicationHost,
-        () => {
-          console.log("Connected to application");
-        }
+        applicationHost
       );
 
       socket.on("data", (data) => {
