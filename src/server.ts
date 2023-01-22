@@ -25,7 +25,7 @@ function createUid() {
 }
 
 // Test if the data is a valid HTTP request and return subdomain
-function getSubdomainFromRequest(data: Buffer) {
+function getSubdomainFromClientID(data: Buffer) {
   const httpRequest = data.toString();
   const lines = httpRequest.split("\n").map((x) => x.trim());
   const headers: { [_: string]: string } = lines
@@ -101,7 +101,7 @@ const userServer = net.createServer(async (userSocket) => {
   // Listen for data from the user
   userSocket.on("data", (data) => {
     if (!subdomain) {
-      subdomain = getSubdomainFromRequest(data);
+      subdomain = getSubdomainFromClientID(data);
 
       if (!subdomain || !clients[subdomain]) {
         console.log("Bad Request");
