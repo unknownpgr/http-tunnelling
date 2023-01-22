@@ -1,18 +1,11 @@
 import crypto from "crypto";
 import net from "net";
-import {
-  getReader,
-  register,
-  sendClose,
-  sendData,
-  TYPE_CLOSE,
-  TYPE_DATA,
-  TYPE_LOG,
-} from "./lib";
+import fs from "fs";
+import { getReader, register, sendClose, sendData, FRAME_TYPE } from "./lib";
+import { config } from "./config";
 
-// Connect to server
-const serverHost = "tunnel.unknownpgr.com";
-const serverPort = 81;
+const serverHost = config.SERVER_HOST;
+const serverPort = config.SERVER_CLIENT_PORT;
 
 // Get application url from args
 const applicationUrl = process.argv[2];
@@ -21,51 +14,63 @@ const applicationUrl = process.argv[2];
 const [applicationHost, applicationPort] = applicationUrl.split(":");
 const applicationPortNumber = applicationPort ? parseInt(applicationPort) : 80;
 
-const read = getReader();
+const ID = (() => {
+  try {
+    const id = fs.readFileSync("client-id");
+    if (id.length !== 32) throw new Error("Invalid client-id file");
+    return id;
+  } catch (e) {
+    const id = crypto.randomBytes(32);
+    fs.writeFileSync("client-id", id);
+    return id;
+  }
+})();
+
 const sockets: { [_: number]: net.Socket } = {};
 
-const ID = crypto.randomBytes(32);
+function createSocket(id: number, client: net.Socket) {
+  const socket = net.createConnection(applicationPortNumber, applicationHost);
+
+  socket.on("data", (data) => {
+    sendData(client, id, data);
+  });
+
+  socket.on("close", () => {
+    sendClose(client, id);
+    delete sockets[id];
+  });
+
+  sockets[id] = socket;
+}
 
 async function main() {
   while (true) {
     console.log("Connecting to server");
     const client = net.createConnection(serverPort, serverHost);
 
+    // Register to server
     register(client, ID);
 
-    const createSocket = (id: number) => {
-      const socket = net.createConnection(
-        applicationPortNumber,
-        applicationHost
-      );
-
-      socket.on("data", (data) => {
-        sendData(client, id, data);
-      });
-
-      socket.on("close", () => {
-        sendClose(client, id);
-        delete sockets[id];
-      });
-
-      sockets[id] = socket;
-    };
+    const read = getReader();
 
     client.on("data", (_data) => {
       const frames = read(_data);
-
       for (const frame of frames) {
         const { type, id, data } = frame;
 
-        if (type === TYPE_DATA) {
-          if (!sockets[id]) createSocket(id);
+        if (type & FRAME_TYPE.DATA) {
+          if (!sockets[id]) createSocket(id, client);
           sockets[id].write(data);
-        } else if (type === TYPE_CLOSE) {
+        }
+
+        if (type & FRAME_TYPE.CLOSE) {
           if (sockets[id]) {
             sockets[id].end();
             delete sockets[id];
           }
-        } else if (type === TYPE_LOG) {
+        }
+
+        if (type & FRAME_TYPE.LOG) {
           console.log(data.toString());
         }
       }

@@ -1,14 +1,17 @@
 import net from "net";
 
-const TYPE_DATA = 0x01;
-const TYPE_CLOSE = 0x02;
-const TYPE_LOG = 0x04;
-const TYPE_REGISTER = 0x08;
+const FRAME_TYPE = {
+  DATA: 0x01,
+  CLOSE: 0x02,
+  LOG: 0x04,
+  REGISTER: 0x08,
+};
 
 const NUMBER_TO_TYPE = {
-  [TYPE_DATA]: "data",
-  [TYPE_CLOSE]: "close",
-  [TYPE_LOG]: "log",
+  0x01: "DATA",
+  0x02: "CLOSE",
+  0x04: "LOG",
+  0x08: "REGISTER",
 };
 
 type Frame = {
@@ -26,19 +29,19 @@ function send(socket: net.Socket, type: number, id?: number, data?: Buffer) {
 }
 
 function register(socket: net.Socket, id: Buffer) {
-  send(socket, TYPE_REGISTER, 0, id);
+  send(socket, FRAME_TYPE.REGISTER, 0, id);
 }
 
 function sendData(socket: net.Socket, id: number, data: Buffer) {
-  send(socket, TYPE_DATA, id, data);
+  send(socket, FRAME_TYPE.DATA, id, data);
 }
 
 function sendLog(socket: net.Socket, data: Buffer) {
-  send(socket, TYPE_LOG, 0, data);
+  send(socket, FRAME_TYPE.LOG, 0, data);
 }
 
 function sendClose(socket: net.Socket, id: number) {
-  send(socket, TYPE_CLOSE, id);
+  send(socket, FRAME_TYPE.CLOSE, id);
 }
 
 function getReader() {
@@ -52,9 +55,7 @@ function getReader() {
       const type = buffer.readUInt8(0);
       const id = buffer.readUInt32BE(1);
       const length = buffer.readUInt32BE(5);
-      if (buffer.length < 9 + length) {
-        break;
-      }
+      if (buffer.length < 9 + length) break;
       const data = buffer.subarray(9, 9 + length);
       buffer = buffer.subarray(9 + length);
       frames.push({ type, id, data });
@@ -66,10 +67,7 @@ function getReader() {
 
 // Export the functions and type constants
 export {
-  TYPE_DATA,
-  TYPE_CLOSE,
-  TYPE_LOG,
-  TYPE_REGISTER,
+  FRAME_TYPE,
   NUMBER_TO_TYPE,
   sendData,
   sendLog,
