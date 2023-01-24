@@ -112,10 +112,10 @@ const userServer = net.createServer(async (userSocket) => {
         console.log("Bad Request");
         // Temporary redirect to 404.html, with query parameter `url`
         userSocket.write(
-          `HTTP/1.1 307 Temporary Redirect\r` +
+          `HTTP/1.1 307 Temporary Redirect\n` +
             `Location: https://tunnel.unknownpgr.com/404.html?url=${encodeURIComponent(
               getServerUrl(subdomain || "")
-            )}\r\r`
+            )}\n\n`
         );
         return;
       }
