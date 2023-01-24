@@ -9,5 +9,21 @@
   <body>
     <h1>Could not find given service</h1>
     <p>Sorry, but the service you are looking for could not be found.</p>
+    <!-- `url` query parameter will contain url intended to be accessed.
+          A link to that url can be provided to the user to allow them to
+          retry the request.
+
+          This javascript snippet will insert such link.
+        -->
+    <script>
+      const url = new URL(window.location.href);
+      const serviceUrl = url.searchParams.get("url");
+      if (serviceUrl) {
+        const link = document.createElement("a");
+        link.href = serviceUrl;
+        link.innerText = "Retry";
+        document.body.appendChild(link);
+      }
+    </script>
   </body>
 </html>
