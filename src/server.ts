@@ -113,7 +113,7 @@ const userServer = net.createServer(async (userSocket) => {
         // Temporary redirect to 404.html, with query parameter `url`
         userSocket.write(
           `HTTP/1.1 307 Temporary Redirect\r` +
-            `Location: /404.html?url=${encodeURIComponent(
+            `Location: https://tunnel.unknownpgr.com/404.html?url=${encodeURIComponent(
               getServerUrl(subdomain || "")
             )}\r\r`
         );
