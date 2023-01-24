@@ -66,6 +66,12 @@ function createSocket(id: number, client: net.Socket) {
     delete sockets[id];
   });
 
+  socket.on("error", (e) => {
+    sendClose(client, id);
+    clear();
+    delete sockets[id];
+  });
+
   sockets[id] = socket;
 }
 
