@@ -1,7 +1,14 @@
 import crypto from "crypto";
 import net from "net";
 import fs from "fs";
-import { getReader, register, sendClose, sendData, FRAME_TYPE } from "./lib";
+import {
+  getReader,
+  register,
+  sendClose,
+  sendData,
+  FRAME_TYPE,
+  sendHeartbeat,
+} from "./lib";
 import { config } from "./config";
 
 const serverHost = config.SERVER_HOST;
@@ -28,15 +35,34 @@ const ID = (() => {
 
 const sockets: { [_: number]: net.Socket } = {};
 
+function createTimeout(timeout: number, onTimeout: () => void) {
+  let timeoutId: NodeJS.Timeout;
+  const refresh = () => {
+    clearTimeout(timeoutId);
+    timeoutId = setTimeout(onTimeout, timeout);
+  };
+  const clear = () => clearTimeout(timeoutId);
+  return { refresh, clear };
+}
+
 function createSocket(id: number, client: net.Socket) {
   const socket = net.createConnection(applicationPortNumber, applicationHost);
 
+  // Clear socket with no data for 5 minutes
+  const { refresh, clear } = createTimeout(5 * 60 * 1000, () => {
+    console.log("Client socket timeout");
+    socket.destroy();
+    delete sockets[id];
+  });
+
   socket.on("data", (data) => {
     sendData(client, id, data);
+    refresh();
   });
 
   socket.on("close", () => {
     sendClose(client, id);
+    clear();
     delete sockets[id];
   });
 
@@ -50,6 +76,15 @@ async function main() {
 
     // Register to server
     register(client, ID);
+
+    // Send heartbeat every 30 seconds. If no heartbeat ack is received, disconnect
+    const { refresh, clear } = createTimeout(30 * 1000, () => {
+      client.destroy();
+    });
+    setInterval(() => {
+      refresh();
+      sendHeartbeat(client);
+    }, 30 * 1000);
 
     const read = getReader();
 
@@ -73,6 +108,8 @@ async function main() {
         if (type & FRAME_TYPE.LOG) {
           console.log(data.toString());
         }
+
+        clear();
       }
     });
 
@@ -87,6 +124,7 @@ async function main() {
       console.error(e);
     }
     console.log("Disconnected from server");
+    clear();
 
     // Destroy all sockets
     for (const id in sockets) {

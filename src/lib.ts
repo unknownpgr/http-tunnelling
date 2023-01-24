@@ -1,13 +1,15 @@
 import net from "net";
 
-const FRAME_TYPE = {
+export const FRAME_TYPE = {
   DATA: 0x01,
   CLOSE: 0x02,
   LOG: 0x04,
   REGISTER: 0x08,
+  HEARTBEAT: 0x10,
+  HEARTBEAT_ACK: 0x20,
 };
 
-const NUMBER_TO_TYPE = {
+export const NUMBER_TO_TYPE = {
   0x01: "DATA",
   0x02: "CLOSE",
   0x04: "LOG",
@@ -28,23 +30,31 @@ function send(socket: net.Socket, type: number, id?: number, data?: Buffer) {
   socket.write(Buffer.concat([header, data || Buffer.alloc(0)]));
 }
 
-function register(socket: net.Socket, id: Buffer) {
+export function register(socket: net.Socket, id: Buffer) {
   send(socket, FRAME_TYPE.REGISTER, 0, id);
 }
 
-function sendData(socket: net.Socket, id: number, data: Buffer) {
+export function sendData(socket: net.Socket, id: number, data: Buffer) {
   send(socket, FRAME_TYPE.DATA, id, data);
 }
 
-function sendLog(socket: net.Socket, data: Buffer) {
+export function sendLog(socket: net.Socket, data: Buffer) {
   send(socket, FRAME_TYPE.LOG, 0, data);
 }
 
-function sendClose(socket: net.Socket, id: number) {
+export function sendClose(socket: net.Socket, id: number) {
   send(socket, FRAME_TYPE.CLOSE, id);
 }
 
-function getReader() {
+export function sendHeartbeat(socket: net.Socket) {
+  send(socket, FRAME_TYPE.HEARTBEAT);
+}
+
+export function sendHeartbeatAck(socket: net.Socket) {
+  send(socket, FRAME_TYPE.HEARTBEAT_ACK);
+}
+
+export function getReader() {
   let buffer = Buffer.alloc(0);
 
   return (data: Buffer) => {
@@ -64,14 +74,3 @@ function getReader() {
     return frames;
   };
 }
-
-// Export the functions and type constants
-export {
-  FRAME_TYPE,
-  NUMBER_TO_TYPE,
-  sendData,
-  sendLog,
-  sendClose,
-  register,
-  getReader,
-};

@@ -1,6 +1,13 @@
 import net from "net";
 import crypto from "crypto";
-import { sendLog, sendData, sendClose, getReader, FRAME_TYPE } from "./lib";
+import {
+  sendLog,
+  sendData,
+  sendClose,
+  getReader,
+  FRAME_TYPE,
+  sendHeartbeatAck,
+} from "./lib";
 import { config } from "./config";
 
 // Server URL
@@ -75,21 +82,19 @@ const clientServer = net.createServer((socket) => {
     const frames = read(data);
     for (const frame of frames) {
       const { type, id: uid, data } = frame;
-      if (type === FRAME_TYPE.REGISTER) {
+      if (type & FRAME_TYPE.REGISTER) {
         id = getSubdomain(data);
         console.log("Client registered: " + id);
         clients[id] = socket;
         users[id] = {};
         sendLog(socket, Buffer.from(getServerUrl(id)));
-      } else if (type === FRAME_TYPE.DATA) {
-        if (users[id] && users[id][uid]) users[id][uid].write(data);
-      } else if (type === FRAME_TYPE.CLOSE) {
-        if (users[id] && users[id][uid]) users[id][uid].end();
-      } else if (type === FRAME_TYPE.LOG) {
-        console.log(data.toString());
-      } else {
-        console.log("Unknown type: " + type);
       }
+      if (type & FRAME_TYPE.DATA)
+        if (users[id] && users[id][uid]) users[id][uid].write(data);
+      if (type & FRAME_TYPE.CLOSE)
+        if (users[id] && users[id][uid]) users[id][uid].end();
+      if (type & FRAME_TYPE.LOG) console.log(data.toString());
+      if (type & FRAME_TYPE.HEARTBEAT) sendHeartbeatAck(socket);
     }
   });
 });
@@ -105,12 +110,12 @@ const userServer = net.createServer(async (userSocket) => {
 
       if (!subdomain || !clients[subdomain]) {
         console.log("Bad Request");
-        // Redirect to 404.html page
+        // Temporary redirect to 404.html, with query parameter `url`
         userSocket.write(
-          "HTTP/1.1 302 Found\n" +
-            `Location: https://${config.SERVER_HOST}/404.html\n` +
-            "Connection: close\n" +
-            "\n"
+          `HTTP/1.1 307 Temporary Redirect\r` +
+            `Location: /404.html?url=${encodeURIComponent(
+              getServerUrl(subdomain || "")
+            )}\r\r`
         );
         return;
       }
