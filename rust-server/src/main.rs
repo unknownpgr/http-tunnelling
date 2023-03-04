@@ -2,79 +2,114 @@ use std::{
     collections::HashMap,
     io::{prelude::*, BufReader},
     net::{TcpListener, TcpStream},
+    sync::{Arc, Mutex},
     thread,
 };
 
-// This function takes ownership of reader and never returns it.
-fn parse_http_request(reader: BufReader<&TcpStream>) -> (String, HashMap<String, String>) {
-    let mut lines = reader.lines();
-    let status_header = lines.next().unwrap().unwrap();
+fn parse_http_request(request: &String) -> HashMap<String, String> {
     let mut headers = HashMap::new();
-
+    let mut lines = request.split("\r");
+    lines.next().unwrap();
     for line in lines {
-        let line = line.unwrap();
         if line.is_empty() {
             break;
         }
-        let mut parts = line.splitn(2, ": ");
-        let name = parts.next().unwrap().to_string();
-        let value = parts.next().unwrap().to_string();
-        headers.insert(name, value);
+        let mut parts = line.split(": ");
+        let key = parts.next().unwrap();
+        let value = parts.next().unwrap();
+        headers.insert(key.to_owned(), value.to_owned());
     }
-
-    return (status_header, headers);
+    headers
 }
 
-fn handle_user(mut stream: TcpStream) {
-    let reader = BufReader::new(&stream);
-    let (status_header, headers) = parse_http_request(reader);
+fn handle_client(mut stream: &TcpStream, workers: &ThreadSafeHashMap<String, &TcpStream>) {
+    let reader = BufReader::new(stream);
 
-    // Print status header
-    println!("{}", status_header);
+    let mut request = String::new();
 
-    // Print headers with indent
-    for (name, value) in headers {
-        println!("  {}: {}", name, value);
+    for line in reader.lines() {
+        let line = line.unwrap();
+        request.push_str(&line);
+        request.push_str("\r");
+        if line.is_empty() {
+            break;
+        }
     }
 
-    let html = "<!DOCTYPE html>
-<html>
-<head>
-<title>Test</title>
-</head>
-<body>
-<h1>Test</h1>
-<p>Received request from <code>{}</code></p>
-</body>
-</html>"
-        .to_string();
+    let headers = parse_http_request(&request);
+    let host = headers.get("Host").unwrap();
 
-    let html = html.replace("{}", &status_header);
+    let workers = workers.lock().unwrap();
 
-    let response = format!(
-        "HTTP/1.1 200 OK
-Content-Length: {}
+    // Check if worker exists
+    if !workers.contains_key(host) {
+        // If not, response 404 to client
+        let response = "HTTP/1.1 404 Not Found\r\r";
+        stream.write(response.as_bytes()).unwrap();
+        stream.flush().unwrap();
+        return;
+    }
 
-{}",
-        html.len(),
-        html
-    );
+    let mut worker = *workers.get(host).unwrap();
+    worker.write(request.as_bytes()).unwrap();
+    worker.flush().unwrap();
 
-    stream.write_all(response.as_bytes()).unwrap();
+    let mut response = String::new();
+    let mut reader = BufReader::new(worker);
+    reader.read_to_string(&mut response).unwrap();
+
+    stream.write(response.as_bytes()).unwrap();
+    stream.flush().unwrap();
 }
 
-fn user_server() {
+fn client_server(
+    workers: &ThreadSafeHashMap<String, &TcpStream>,
+    clients: &ThreadSafeHashMap<String, &TcpStream>,
+) {
     let listener = TcpListener::bind("0.0.0.0:80").unwrap();
 
-    for stream in listener.incoming() {
-        thread::spawn(|| handle_user(stream.unwrap()));
-    }
+    thread::scope(|scope| {
+        for stream in listener.incoming() {
+            let stream = stream.unwrap();
+            scope.spawn(move || handle_client(&stream, workers));
+        }
+    });
+}
+
+fn worker_server(
+    workers: &ThreadSafeHashMap<String, &TcpStream>,
+    clients: &ThreadSafeHashMap<String, &TcpStream>,
+) {
+    let listener = TcpListener::bind("0.0.0.0:81").unwrap();
+}
+
+type ThreadSafeHashMap<K, V> = Arc<Mutex<HashMap<K, V>>>;
+
+fn get_thread_safe_hashmap<K, V>() -> ThreadSafeHashMap<K, V> {
+    let map = HashMap::new();
+    Arc::new(Mutex::new(map))
 }
 
 fn main() {
-    let handle = thread::spawn(|| {
-        user_server();
-    });
+    let workers = get_thread_safe_hashmap();
+    let clients = get_thread_safe_hashmap();
 
-    handle.join().unwrap();
+    let handle_client = {
+        let workers = workers.clone();
+        let clients = clients.clone();
+        thread::spawn(move || {
+            client_server(&workers, &clients);
+        })
+    };
+
+    let handle_worker = {
+        let workers = workers.clone();
+        let clients = clients.clone();
+        thread::spawn(move || {
+            worker_server(&workers, &clients);
+        })
+    };
+
+    handle_client.join().unwrap();
+    handle_worker.join().unwrap();
 }
