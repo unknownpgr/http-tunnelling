@@ -1,3 +1,6 @@
 {
-  "cSpell.words": ["unknownpgr"]
+  "cSpell.words": ["unknownpgr"],
+  "rust-analyzer.inlayHints.parameterHints.enable": false,
+  "rust-analyzer.inlayHints.typeHints.enable": false,
+  "rust-analyzer.inlayHints.closingBraceHints.enable": false
 }
