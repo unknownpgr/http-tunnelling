@@ -82,7 +82,6 @@ fn handle_client<'a>(
     let headers = parse_http_request(&request);
     let host = headers.get("Host").unwrap();
     let subdomain = host.split(".").next().unwrap();
-    println!("Client connected: {}", subdomain);
 
     let workers = workers.read().unwrap();
 
