@@ -68,7 +68,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "rust-server"
+name = "rust"
 version = "0.1.0"
 dependencies = [
  "md5",
