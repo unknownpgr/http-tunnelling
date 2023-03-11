@@ -1,6 +1,10 @@
 use md5;
 mod protocol;
-use protocol::{read_frame, send_close, send_data, send_heartbeat_ack, send_log};
+use protocol::{
+    read_frame, send_close, send_data, send_heartbeat_ack, send_log, FRAME_TYPE_CLOSE,
+    FRAME_TYPE_DATA, FRAME_TYPE_HEARTBEAT, FRAME_TYPE_LOG, FRAME_TYPE_REGISTER,
+    FRAME_TYPE_UNREGISTER,
+};
 use std::{
     collections::HashMap,
     io::{prelude::*, BufReader},
@@ -170,8 +174,7 @@ fn handle_worker<'a>(
     loop {
         let (frame_type, id, data) = read_frame(stream);
         match frame_type {
-            0x00 => {
-                // UNREGISTER
+            FRAME_TYPE_UNREGISTER => {
                 {
                     let mut workers = workers.write().unwrap();
                     let stream = workers.remove(&subdomain).unwrap();
@@ -195,16 +198,14 @@ fn handle_worker<'a>(
                 break;
             }
 
-            0x01 => {
-                // DATA
+            FRAME_TYPE_DATA => {
                 let clients = clients.read().unwrap();
                 let mut client = clients.get(&id).unwrap();
                 client.write(&data).unwrap();
                 client.flush().unwrap();
             }
 
-            0x02 => {
-                // CLOSE
+            FRAME_TYPE_CLOSE => {
                 let mut clients = clients.write().unwrap();
                 if !clients.contains_key(&id) {
                     continue;
@@ -217,19 +218,16 @@ fn handle_worker<'a>(
                 clients_worker_map.remove(&id);
             }
 
-            0x04 => {
-                //LOG
+            FRAME_TYPE_LOG => {
                 let data = String::from_utf8(data).unwrap();
                 println!("Worker {} log: {}", id, data);
             }
 
-            0x08 => {
-                //REGISTER, Panic here.
+            FRAME_TYPE_REGISTER => {
                 panic!("Worker {} tried to register again", id);
             }
 
-            0x10 => {
-                // Heartbeat
+            FRAME_TYPE_HEARTBEAT => {
                 send_heartbeat_ack(stream);
             }
 

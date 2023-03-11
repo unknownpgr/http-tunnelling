@@ -1,13 +1,13 @@
 use std::io::prelude::*;
 use std::net::TcpStream;
 
-const FRAME_TYPE_UNREGISTER: u8 = 0x0;
-const FRAME_TYPE_DATA: u8 = 0x1;
-const FRAME_TYPE_CLOSE: u8 = 0x2;
-const FRAME_TYPE_LOG: u8 = 0x4;
-const FRAME_TYPE_REGISTER: u8 = 08;
-const FRAME_TYPE_HEARTBEAT: u8 = 0x10;
-const FRAME_TYPE_HEARTBEAT_ACK: u8 = 0x20;
+pub const FRAME_TYPE_UNREGISTER: u8 = 0x0;
+pub const FRAME_TYPE_DATA: u8 = 0x1;
+pub const FRAME_TYPE_CLOSE: u8 = 0x2;
+pub const FRAME_TYPE_LOG: u8 = 0x4;
+pub const FRAME_TYPE_REGISTER: u8 = 08;
+pub const FRAME_TYPE_HEARTBEAT: u8 = 0x10;
+pub const FRAME_TYPE_HEARTBEAT_ACK: u8 = 0x20;
 
 type Frame = (u8, u32, Vec<u8>);
 
