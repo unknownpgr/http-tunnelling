@@ -1,13 +1,13 @@
 use md5;
 mod protocol;
-use protocol::{read_frame, send_close, send_data, send_heartbeat, send_heartbeat_ack, send_log};
+use protocol::{read_frame, send_close, send_data, send_heartbeat_ack, send_log};
 use std::{
     collections::HashMap,
     io::{prelude::*, BufReader},
     net::{Shutdown, TcpListener, TcpStream},
     sync::{
         atomic::{AtomicUsize, Ordering},
-        Arc, Mutex,
+        Arc, RwLock,
     },
     thread,
 }; // 0.8
@@ -19,9 +19,10 @@ use std::{
  *
  * 나는 지금 두 개 이상의 스레드에서 한 개의 소켓에 접근하려고 한다.
  * 이것을 어떻게 개선할 수 있을까?
+ * 근본적으로 하나의 변수에 두 개의 reference가 존재할 수 있는가?
  */
 
-type ThreadSafeHashMap<K, V> = Arc<Mutex<HashMap<K, V>>>;
+type ThreadSafeHashMap<K, V> = Arc<RwLock<HashMap<K, V>>>;
 
 static UID_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -30,10 +31,10 @@ fn get_uid() -> u32 {
 }
 
 fn get_subdomain(seed: Vec<u8>) -> String {
-    // Generate random subdomain from seed
+    // Generate random subdomain from seed.
     let hash = md5::compute(seed);
     let mut subdomain = String::new();
-    for i in 0..8 {
+    for i in 0..2 {
         let mut num = 0;
         for j in 0..4 {
             num += (hash[i * 4 + j] as u32) << (j * 8);
@@ -63,6 +64,7 @@ fn handle_client<'a>(
     mut stream: TcpStream,
     workers: &ThreadSafeHashMap<String, TcpStream>,
     clients: &ThreadSafeHashMap<u32, TcpStream>,
+    clients_worker_map: &ThreadSafeHashMap<u32, String>,
 ) {
     let reader = BufReader::new(&stream);
 
@@ -79,11 +81,13 @@ fn handle_client<'a>(
 
     let headers = parse_http_request(&request);
     let host = headers.get("Host").unwrap();
+    let subdomain = host.split(".").next().unwrap();
+    println!("Client connected: {}", subdomain);
 
-    let workers = workers.lock().unwrap();
+    let workers = workers.read().unwrap();
 
     // Check if worker exists
-    if !workers.contains_key(host) {
+    if !workers.contains_key(subdomain) {
         // If not, response 404 to client
         let response = "HTTP/1.1 404 Not Found\r\r";
         stream.write(response.as_bytes()).unwrap();
@@ -91,26 +95,49 @@ fn handle_client<'a>(
         return;
     }
 
-    // If worker exists, register this stream to clients.
-    // The id of this client is subdomain + uid
+    // Register client
     let uid = get_uid();
-    let mut clients = clients.lock().unwrap();
-    clients.insert(uid, stream);
+    {
+        let mut clients = clients.write().unwrap();
+        clients.insert(uid, stream);
+        let mut clients_worker_map = clients_worker_map.write().unwrap();
+        clients_worker_map.insert(uid, subdomain.to_owned());
+    }
 
-    let worker = workers.get(host).unwrap();
+    let worker = workers.get(subdomain).unwrap();
     send_data(worker, uid, request.as_bytes().to_vec());
+
+    // Wait until client disconnects
+    {
+        let clients = clients.read().unwrap();
+        let mut stream = clients.get(&uid).unwrap();
+        let mut buf = [0; 1];
+        stream.read(&mut buf).unwrap();
+    }
+
+    // When client disconnects, send CLOSE frame to worker
+    send_close(worker, uid);
+
+    // Remove client from clients
+    let mut clients = clients.write().unwrap();
+    clients.remove(&uid);
+
+    // Remove client from clients_worker_map
+    let mut clients_worker_map = clients_worker_map.write().unwrap();
+    clients_worker_map.remove(&uid);
 }
 
 fn client_server<'a>(
     workers: &ThreadSafeHashMap<String, TcpStream>,
     clients: &ThreadSafeHashMap<u32, TcpStream>,
+    clients_worker_map: &ThreadSafeHashMap<u32, String>,
 ) {
     let listener = TcpListener::bind("0.0.0.0:80").unwrap();
 
     thread::scope(|scope| {
         for stream in listener.incoming() {
             let stream: TcpStream = stream.unwrap();
-            scope.spawn(move || handle_client(stream, workers, clients));
+            scope.spawn(move || handle_client(stream, workers, clients, clients_worker_map));
         }
     });
 }
@@ -119,40 +146,59 @@ fn handle_worker<'a>(
     stream: TcpStream,
     workers: &ThreadSafeHashMap<String, TcpStream>,
     clients: &ThreadSafeHashMap<u32, TcpStream>,
+    clients_worker_map: &ThreadSafeHashMap<u32, String>,
 ) {
-    let (frame_type, id, data) = read_frame(&stream);
-    // This frame, which is the first frame, must be a REGISTER frame.
+    let (frame_type, _, data) = read_frame(&stream);
     if frame_type != 0x08 {
         panic!("First frame must be REGISTER frame");
     }
 
     let subdomain = get_subdomain(data);
-    println!("Worker {} registered with subdomain {}", id, subdomain);
-    let mut workers = workers.lock().unwrap();
-    workers.insert(subdomain.clone(), stream);
+    println!("Worker registered: {}", subdomain);
+    send_log(
+        &stream,
+        format!("subdomain:{}", subdomain).as_bytes().to_vec(),
+    );
 
-    // At this point, ownership of `stream` is moved to `workers`.
-    // Therefore, we cannot use `stream` anymore.
-    // We need to get the stream from `workers` again.
+    {
+        let mut workers = workers.write().unwrap();
+        workers.insert(subdomain.clone(), stream);
+    }
 
-    // `stream` below is not the same as `stream` above.
-    // `stream` below is a reference to the stream in `workers`.
-    // However, `stream` above is an actual stream.
-    let stream = workers.get(&subdomain).unwrap();
+    let _workers = workers.read().unwrap();
+    let stream = _workers.get(&subdomain).unwrap();
 
     loop {
         let (frame_type, id, data) = read_frame(stream);
         match frame_type {
             0x00 => {
                 // UNREGISTER
-                let stream = workers.remove(&subdomain).unwrap();
-                stream.shutdown(Shutdown::Both).unwrap();
+                {
+                    let mut workers = workers.write().unwrap();
+                    let stream = workers.remove(&subdomain).unwrap();
+                    stream.shutdown(Shutdown::Both).unwrap();
+
+                    // Close all related clients
+                    let mut clients_worker_map = clients_worker_map.write().unwrap();
+                    let mut clients = clients.write().unwrap();
+                    let mut to_remove = Vec::new();
+                    for (id, worker) in clients_worker_map.iter() {
+                        if worker == &subdomain {
+                            to_remove.push(*id);
+                        }
+                    }
+                    for id in to_remove {
+                        clients_worker_map.remove(&id);
+                        let stream = clients.remove(&id).unwrap();
+                        stream.shutdown(Shutdown::Both).unwrap();
+                    }
+                }
                 break;
             }
 
             0x01 => {
                 // DATA
-                let clients = clients.lock().unwrap();
+                let clients = clients.read().unwrap();
                 let mut client = clients.get(&id).unwrap();
                 client.write(&data).unwrap();
                 client.flush().unwrap();
@@ -160,11 +206,16 @@ fn handle_worker<'a>(
 
             0x02 => {
                 // CLOSE
-                let mut clients = clients.lock().unwrap();
+                let mut clients = clients.write().unwrap();
+                if !clients.contains_key(&id) {
+                    continue;
+                }
                 let client = clients.get(&id).unwrap();
-                // Disconnect client
                 client.shutdown(Shutdown::Both).unwrap();
                 clients.remove(&id);
+
+                let mut clients_worker_map = clients_worker_map.write().unwrap();
+                clients_worker_map.remove(&id);
             }
 
             0x04 => {
@@ -178,7 +229,15 @@ fn handle_worker<'a>(
                 panic!("Worker {} tried to register again", id);
             }
 
-            _ => {}
+            0x10 => {
+                // Heartbeat
+                send_heartbeat_ack(stream);
+            }
+
+            _ => {
+                // Unknown frame type
+                panic!("Unknown frame type {}", frame_type);
+            }
         }
     }
 }
@@ -186,39 +245,43 @@ fn handle_worker<'a>(
 fn worker_server(
     workers: &ThreadSafeHashMap<String, TcpStream>,
     clients: &ThreadSafeHashMap<u32, TcpStream>,
+    clients_worker_map: &ThreadSafeHashMap<u32, String>,
 ) {
     let listener = TcpListener::bind("0.0.0.0:81").unwrap();
 
     thread::scope(|scope| {
         for stream in listener.incoming() {
             let stream: TcpStream = stream.unwrap();
-            scope.spawn(move || handle_worker(stream, workers, clients));
+            scope.spawn(move || handle_worker(stream, workers, clients, clients_worker_map));
         }
     });
 }
 
 fn get_thread_safe_hashmap<K, V>() -> ThreadSafeHashMap<K, V> {
     let map = HashMap::new();
-    Arc::new(Mutex::new(map))
+    Arc::new(RwLock::new(map))
 }
 
 fn main() {
     let workers = get_thread_safe_hashmap();
     let clients = get_thread_safe_hashmap();
+    let clients_worker_map = get_thread_safe_hashmap();
 
     let handle_client = {
         let workers = workers.clone();
         let clients = clients.clone();
+        let clients_worker_map = clients_worker_map.clone();
         thread::spawn(move || {
-            client_server(&workers, &clients);
+            client_server(&workers, &clients, &clients_worker_map);
         })
     };
 
     let handle_worker = {
         let workers = workers.clone();
         let clients = clients.clone();
+        let clients_worker_map = clients_worker_map.clone();
         thread::spawn(move || {
-            worker_server(&workers, &clients);
+            worker_server(&workers, &clients, &clients_worker_map);
         })
     };
 

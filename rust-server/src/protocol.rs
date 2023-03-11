@@ -19,7 +19,7 @@ fn send(mut stream: &TcpStream, t: u8, id: u32, data: Vec<u8>) {
     frame.push((id >> 8) as u8);
     frame.push(id as u8);
 
-    let len: u32 = frame.len() as u32;
+    let len: u32 = data.len() as u32;
     frame.push((len >> 24) as u8);
     frame.push((len >> 16) as u8);
     frame.push((len >> 8) as u8);
@@ -30,7 +30,6 @@ fn send(mut stream: &TcpStream, t: u8, id: u32, data: Vec<u8>) {
 }
 
 pub fn register(stream: &TcpStream, data: Vec<u8>) {
-    let data = vec![];
     send(&stream, FRAME_TYPE_REGISTER, 0, data);
 }
 
