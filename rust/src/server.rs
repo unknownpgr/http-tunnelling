@@ -16,16 +16,6 @@ use std::{
     thread,
 }; // 0.8
 
-/**
- * 자바스크립트와 같은 방식으로 접근해서는 안 된다.
- * 자바스크립트는 이벤트 기반으로 동작한다. 즉, 비동기가 매우 자연스럽다.
- * 그러나 러스트는 기본적으로 C언어처럼 동기 언어로 동작한다.
- *
- * 나는 지금 두 개 이상의 스레드에서 한 개의 소켓에 접근하려고 한다.
- * 이것을 어떻게 개선할 수 있을까?
- * 근본적으로 하나의 변수에 두 개의 reference가 존재할 수 있는가?
- */
-
 type ThreadSafeHashMap<K, V> = Arc<RwLock<HashMap<K, V>>>;
 
 static UID_COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -86,11 +76,13 @@ fn handle_client<'a>(
     let headers = parse_http_request(&request);
     let host = headers.get("Host").unwrap();
     let subdomain = host.split(".").next().unwrap();
-
+    println!("Client request: {}", subdomain);
+    println!("Waiting for worker to be loaded...");
     let workers = workers.read().unwrap();
-
+    println!("Finding worker...");
     // Check if worker exists
     if !workers.contains_key(subdomain) {
+        println!("Worker not found");
         // If not, response 404 to client
         let response = "HTTP/1.1 404 Not Found\r\r";
         stream.write(response.as_bytes()).unwrap();
@@ -99,6 +91,7 @@ fn handle_client<'a>(
     }
 
     // Register client
+    println!("Registering client...");
     let uid = get_uid();
     {
         let mut clients = clients.write().unwrap();
@@ -106,9 +99,11 @@ fn handle_client<'a>(
         let mut clients_worker_map = clients_worker_map.write().unwrap();
         clients_worker_map.insert(uid, subdomain.to_owned());
     }
+    println!("Client registered: {}", uid);
 
     let worker = workers.get(subdomain).unwrap();
     send_data(worker, uid, request.as_bytes().to_vec());
+    println!("Request sent to worker");
 
     // Wait until client disconnects
     {
@@ -157,29 +152,34 @@ fn handle_worker<'a>(
     }
 
     let subdomain = get_subdomain(data);
-    println!("Worker registered: {}", subdomain);
     send_log(
         &stream,
         format!("subdomain:{}", subdomain).as_bytes().to_vec(),
     );
 
     {
+        println!("Registering worker...");
         let mut workers = workers.write().unwrap();
         workers.insert(subdomain.clone(), stream);
+        println!("Worker registered: {}", subdomain);
     }
 
-    let _workers = workers.read().unwrap();
-    let stream = _workers.get(&subdomain).unwrap();
+    let stream = {
+        let _workers = workers.read().unwrap();
+        let stream = _workers.get(&subdomain).unwrap();
+        stream.try_clone().unwrap()
+    };
 
     loop {
-        let (frame_type, id, data) = read_frame(stream);
+        let (frame_type, id, data) = read_frame(&stream);
         match frame_type {
             FRAME_TYPE_UNREGISTER => {
                 {
+                    println!("Unregistering worker...");
                     let mut workers = workers.write().unwrap();
                     let stream = workers.remove(&subdomain).unwrap();
                     stream.shutdown(Shutdown::Both).unwrap();
-
+                    println!("Worker unregistered: {}", subdomain);
                     // Close all related clients
                     let mut clients_worker_map = clients_worker_map.write().unwrap();
                     let mut clients = clients.write().unwrap();
@@ -228,7 +228,7 @@ fn handle_worker<'a>(
             }
 
             FRAME_TYPE_HEARTBEAT => {
-                send_heartbeat_ack(stream);
+                send_heartbeat_ack(&stream);
             }
 
             _ => {
@@ -260,6 +260,8 @@ fn get_thread_safe_hashmap<K, V>() -> ThreadSafeHashMap<K, V> {
 }
 
 fn main() {
+    println!("Starting server...");
+
     let workers = get_thread_safe_hashmap();
     let clients = get_thread_safe_hashmap();
     let clients_worker_map = get_thread_safe_hashmap();
