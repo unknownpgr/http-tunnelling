@@ -76,45 +76,50 @@ fn handle_client<'a>(
     let headers = parse_http_request(&request);
     let host = headers.get("Host").unwrap();
     let subdomain = host.split(".").next().unwrap();
-    println!("Client request: {}", subdomain);
-    println!("Waiting for worker to be loaded...");
-    let workers = workers.read().unwrap();
-    println!("Finding worker...");
-    // Check if worker exists
-    if !workers.contains_key(subdomain) {
-        println!("Worker not found");
-        // If not, response 404 to client
-        let response = "HTTP/1.1 404 Not Found\r\r";
-        stream.write(response.as_bytes()).unwrap();
-        stream.flush().unwrap();
-        return;
+
+    // This code must be in a block because it is necessary to drop the lock.
+    // There is blocking task (client disconnection waiting) below.
+    // If the lock is not dropped, it will prevent other threads from acquiring the lock.
+    {
+        let workers = workers.read().unwrap();
+        // Check if worker exists
+        if !workers.contains_key(subdomain) {
+            // If not, response 404 to client
+            let response = "HTTP/1.1 404 Not Found\r\r";
+            stream.write(response.as_bytes()).unwrap();
+            stream.flush().unwrap();
+            return;
+        }
     }
 
     // Register client
-    println!("Registering client...");
     let uid = get_uid();
+
     {
         let mut clients = clients.write().unwrap();
         clients.insert(uid, stream);
         let mut clients_worker_map = clients_worker_map.write().unwrap();
         clients_worker_map.insert(uid, subdomain.to_owned());
+        let workers = workers.read().unwrap();
+        let worker = workers.get(subdomain).unwrap();
+        send_data(worker, uid, request.as_bytes().to_vec()).unwrap();
     }
-    println!("Client registered: {}", uid);
 
-    let worker = workers.get(subdomain).unwrap();
-    send_data(worker, uid, request.as_bytes().to_vec());
-    println!("Request sent to worker");
-
-    // Wait until client disconnects
+    // Wait until client disconnects.
     {
         let clients = clients.read().unwrap();
-        let mut stream = clients.get(&uid).unwrap();
+        let mut stream = clients.get(&uid).unwrap().try_clone().unwrap();
+        // Note that clients must be dropped here.
+        // If it is not dropped, it will prevents other threads from acquiring the lock.
+        drop(clients);
         let mut buf = [0; 1];
         stream.read(&mut buf).unwrap();
-    }
+    };
 
     // When client disconnects, send CLOSE frame to worker
-    send_close(worker, uid);
+    let workers = workers.read().unwrap();
+    let worker = workers.get(subdomain).unwrap();
+    send_close(worker, uid).unwrap();
 
     // Remove client from clients
     let mut clients = clients.write().unwrap();
@@ -135,9 +140,15 @@ fn client_server<'a>(
     thread::scope(|scope| {
         for stream in listener.incoming() {
             let stream: TcpStream = stream.unwrap();
-            scope.spawn(move || handle_client(stream, workers, clients, clients_worker_map));
+            scope.spawn(|| handle_client(stream, workers, clients, clients_worker_map));
         }
     });
+}
+
+fn try_shutdown(stream: &TcpStream) {
+    if let Err(_) = stream.shutdown(Shutdown::Both) {
+        // Ignore
+    }
 }
 
 fn handle_worker<'a>(
@@ -148,17 +159,18 @@ fn handle_worker<'a>(
 ) {
     let (frame_type, _, data) = read_frame(&stream);
     if frame_type != 0x08 {
-        panic!("First frame must be REGISTER frame");
+        try_shutdown(&stream);
+        return;
     }
 
     let subdomain = get_subdomain(data);
     send_log(
         &stream,
         format!("subdomain:{}", subdomain).as_bytes().to_vec(),
-    );
+    )
+    .unwrap();
 
     {
-        println!("Registering worker...");
         let mut workers = workers.write().unwrap();
         workers.insert(subdomain.clone(), stream);
         println!("Worker registered: {}", subdomain);
@@ -174,26 +186,24 @@ fn handle_worker<'a>(
         let (frame_type, id, data) = read_frame(&stream);
         match frame_type {
             FRAME_TYPE_UNREGISTER => {
-                {
-                    println!("Unregistering worker...");
-                    let mut workers = workers.write().unwrap();
-                    let stream = workers.remove(&subdomain).unwrap();
-                    stream.shutdown(Shutdown::Both).unwrap();
-                    println!("Worker unregistered: {}", subdomain);
-                    // Close all related clients
-                    let mut clients_worker_map = clients_worker_map.write().unwrap();
-                    let mut clients = clients.write().unwrap();
-                    let mut to_remove = Vec::new();
-                    for (id, worker) in clients_worker_map.iter() {
-                        if worker == &subdomain {
-                            to_remove.push(*id);
-                        }
+                let mut workers = workers.write().unwrap();
+                let stream = workers.remove(&subdomain).unwrap();
+                try_shutdown(&stream);
+
+                println!("Worker unregistered: {}", subdomain);
+                // Close all related clients
+                let mut clients_worker_map = clients_worker_map.write().unwrap();
+                let mut clients = clients.write().unwrap();
+                let mut to_remove = Vec::new();
+                for (id, worker) in clients_worker_map.iter() {
+                    if worker == &subdomain {
+                        to_remove.push(*id);
                     }
-                    for id in to_remove {
-                        clients_worker_map.remove(&id);
-                        let stream = clients.remove(&id).unwrap();
-                        stream.shutdown(Shutdown::Both).unwrap();
-                    }
+                }
+                for id in to_remove {
+                    clients_worker_map.remove(&id);
+                    let stream = clients.remove(&id).unwrap();
+                    try_shutdown(&stream);
                 }
                 break;
             }
@@ -211,7 +221,7 @@ fn handle_worker<'a>(
                     continue;
                 }
                 let client = clients.get(&id).unwrap();
-                client.shutdown(Shutdown::Both).unwrap();
+                try_shutdown(&client);
                 clients.remove(&id);
 
                 let mut clients_worker_map = clients_worker_map.write().unwrap();
@@ -224,11 +234,11 @@ fn handle_worker<'a>(
             }
 
             FRAME_TYPE_REGISTER => {
-                panic!("Worker {} tried to register again", id);
+                // Ignore
             }
 
             FRAME_TYPE_HEARTBEAT => {
-                send_heartbeat_ack(&stream);
+                send_heartbeat_ack(&stream).unwrap();
             }
 
             _ => {
@@ -260,8 +270,6 @@ fn get_thread_safe_hashmap<K, V>() -> ThreadSafeHashMap<K, V> {
 }
 
 fn main() {
-    println!("Starting server...");
-
     let workers = get_thread_safe_hashmap();
     let clients = get_thread_safe_hashmap();
     let clients_worker_map = get_thread_safe_hashmap();
@@ -283,6 +291,8 @@ fn main() {
             worker_server(&workers, &clients, &clients_worker_map);
         })
     };
+
+    println!("Server started");
 
     handle_client.join().unwrap();
     handle_worker.join().unwrap();
