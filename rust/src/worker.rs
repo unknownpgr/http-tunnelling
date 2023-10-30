@@ -49,14 +49,9 @@ fn create_application_connection(
     id: u32,
     host: &str,
     port: u16,
-    connections: &Arc<RwLock<HashMap<u32, TcpStream>>>,
 ) -> Result<TcpStream, ()> {
     let stream = match TcpStream::connect(format!("{}:{}", host, port)) {
         Ok(stream) => {
-            connections
-                .write()
-                .unwrap()
-                .insert(id, stream.try_clone().unwrap());
             stream
         }
         Err(_) => {
@@ -67,15 +62,22 @@ fn create_application_connection(
     return Ok(stream);
 }
 
-fn connection_thread(server_stream: &TcpStream, mut app_stream: &TcpStream, id: u32) {
+fn connection_thread(
+    server_stream: &TcpStream,
+    mut app_stream: &TcpStream,
+    id: u32,
+    connections: Arc<RwLock<HashMap<u32, TcpStream>>>,
+) {
     // looping, send all data from application to server.
     loop {
-        let mut buf = [0; 1024];
+        let mut buf = [0; 1024 * 100];
         match app_stream.read(&mut buf) {
             Ok(n) => {
                 if n == 0 {
                     // If application closed the connection, send close frame to server.
+                    try_shutdown(app_stream);
                     send_close(server_stream, id).unwrap();
+                    connections.write().unwrap().remove(&id);
                     break;
                 } else {
                     // If data received, send data frame to server.
@@ -84,7 +86,9 @@ fn connection_thread(server_stream: &TcpStream, mut app_stream: &TcpStream, id: 
             }
             Err(_) => {
                 // If error occurred, send close frame to server.
+                try_shutdown(app_stream);
                 send_close(server_stream, id).unwrap();
+                connections.write().unwrap().remove(&id);
                 break;
             }
         }
@@ -170,6 +174,9 @@ fn main() {
     let (app_host, app_port) = parse_host(&app_url);
     let (server_host, server_port) = parse_host(&server_url);
 
+    println!("Application host: {}", app_host);
+    println!("Application port: {}", app_port);
+
     // Issue an id for this worker.
     let id = issue_id();
 
@@ -227,36 +234,48 @@ fn main() {
                 FRAME_TYPE_DATA => {
                     // If connection to application is not established, create a new connection.
                     if !connections.read().unwrap().contains_key(&id) {
-                        let app_stream = create_application_connection(
-                            &stream,
-                            id,
-                            &app_host,
-                            app_port,
-                            &connections,
-                        );
+                        let app_stream =
+                            create_application_connection(&stream, id, &app_host, app_port);
                         match app_stream {
                             Ok(app_stream) => {
-                                let app_stream = app_stream.try_clone().unwrap();
-                                let stream = stream.try_clone().unwrap();
-                                thread::spawn(move || {
-                                    connection_thread(&stream, &app_stream, id);
-                                });
+                                connections
+                                    .write()
+                                    .unwrap()
+                                    .insert(id, app_stream.try_clone().unwrap());
                             }
                             Err(_) => {
+                                println!("Failed to connect to application.");
                                 send_close(&stream, id).unwrap();
                                 continue;
                             }
                         }
                     }
 
+                    {
+                        // Print size of connections
+                        let connections = connections.read().unwrap();
+                        println!("Connections: {}", connections.len());
+                    }
+
                     // Send data to application.
-                    let connections = connections.read().unwrap();
-                    let mut app_stream = connections.get(&id).unwrap();
-                    match app_stream.write(&data) {
-                        Ok(_) => {}
-                        Err(_) => {
-                            send_close(&stream, id).unwrap();
+                    {
+                        let _connections = connections.read().unwrap();
+                        let mut app_stream = _connections.get(&id).unwrap();
+                        match app_stream.write(&data) {
+                            Ok(_) => {}
+                            Err(_) => {
+                                println!("Failed to send data to application.");
+                                try_shutdown(app_stream);
+                                send_close(&stream, id).unwrap();
+                                continue;
+                            }
                         }
+                        let stream = stream.try_clone().unwrap();
+                        let app_stream = app_stream.try_clone().unwrap();
+                        let connections = connections.clone();
+                        thread::spawn(move || {
+                            connection_thread(&stream, &app_stream, id, connections);
+                        });
                     }
                 }
                 FRAME_TYPE_HEARTBEAT_ACK => {

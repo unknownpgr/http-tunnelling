@@ -40,7 +40,7 @@ fn get_subdomain(seed: Vec<u8>) -> String {
 
 fn parse_http_request(request: &String) -> HashMap<String, String> {
     let mut headers = HashMap::new();
-    let mut lines = request.split("\r");
+    let mut lines = request.split("\n");
     lines.next().unwrap();
     for line in lines {
         if line.is_empty() {
@@ -54,7 +54,7 @@ fn parse_http_request(request: &String) -> HashMap<String, String> {
     headers
 }
 
-fn handle_client<'a>(
+fn handle_client(
     mut stream: TcpStream,
     workers: &ThreadSafeHashMap<String, TcpStream>,
     clients: &ThreadSafeHashMap<u32, TcpStream>,
@@ -67,11 +67,14 @@ fn handle_client<'a>(
     for line in reader.lines() {
         let line = line.unwrap();
         request.push_str(&line);
-        request.push_str("\r");
+        request.push_str("\n");
         if line.is_empty() {
             break;
         }
     }
+
+    println!("Request from client");
+    println!("Request: {}", request);
 
     let headers = parse_http_request(&request);
     let host = headers.get("Host").unwrap();
@@ -100,6 +103,11 @@ fn handle_client<'a>(
         clients.insert(uid, stream);
         let mut clients_worker_map = clients_worker_map.write().unwrap();
         clients_worker_map.insert(uid, subdomain.to_owned());
+    }
+
+    // This code block and code block above must not be merged.
+    // If they are merged, it will cause deadlock.
+    {
         let workers = workers.read().unwrap();
         let worker = workers.get(subdomain).unwrap();
         send_data(worker, uid, request.as_bytes().to_vec()).unwrap();
@@ -130,7 +138,7 @@ fn handle_client<'a>(
     clients_worker_map.remove(&uid);
 }
 
-fn client_server<'a>(
+fn client_server(
     workers: &ThreadSafeHashMap<String, TcpStream>,
     clients: &ThreadSafeHashMap<u32, TcpStream>,
     clients_worker_map: &ThreadSafeHashMap<u32, String>,
@@ -292,7 +300,7 @@ fn main() {
         })
     };
 
-    println!("Server started");
+    println!("Server started. V1.0");
 
     handle_client.join().unwrap();
     handle_worker.join().unwrap();
