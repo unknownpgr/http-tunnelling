@@ -129,8 +129,9 @@ func getServerName(data []byte) string {
 	return hash[:16]
 }
 
-var serverConnections = make(map[string]net.Conn)
-var clientConnections = make(map[string]map[int]net.Conn)
+var mutex = sync.Mutex{}
+var _serverConnections = make(map[string]net.Conn)
+var _clientConnections = make(map[string]map[int]net.Conn)
 
 func serverConnectionHandler(conn net.Conn) {
 	var buffer = make([]byte, 0)
@@ -159,13 +160,15 @@ func serverConnectionHandler(conn net.Conn) {
 		switch frameType {
 		case FRAME_TYPE["REGISTER"]:
 			servername = getServerName(frameData)
-			serverConnections[servername] = conn
-			clientConnections[servername] = make(map[int]net.Conn)
+			mutex.Lock()
+			_serverConnections[servername] = conn
+			_clientConnections[servername] = make(map[int]net.Conn)
+			mutex.Unlock()
 			sendLog(conn, []byte("Server Registered : "+servername))
 			fmt.Println("Server Registered : ", servername)
 
 		case FRAME_TYPE["DATA"]:
-			client := clientConnections[servername][id]
+			client := _clientConnections[servername][id]
 			if client == nil {
 				fmt.Println("Client not found : ", id)
 				continue
@@ -173,13 +176,15 @@ func serverConnectionHandler(conn net.Conn) {
 			client.Write(frameData)
 
 		case FRAME_TYPE["CLOSE"]:
-			client := clientConnections[servername][id]
+			client := _clientConnections[servername][id]
 			if client == nil {
 				fmt.Println("Client not found : ", id)
 				continue
 			}
 			client.Close()
-			delete(clientConnections[servername], id)
+			mutex.Lock()
+			delete(_clientConnections[servername], id)
+			mutex.Unlock()
 
 		case FRAME_TYPE["LOG"]:
 			fmt.Println("Log : ", string(frameData))
@@ -201,11 +206,13 @@ type ClientConnection struct {
 
 func (client *ClientConnection) Close() {
 	client.Conn.Close()
-	server := serverConnections[client.ServerName]
+	mutex.Lock()
+	server := _serverConnections[client.ServerName]
 	if server != nil {
 		sendClose(server, intToBytes(client.Id))
-		delete(clientConnections[client.ServerName], client.Id)
+		delete(_clientConnections[client.ServerName], client.Id)
 	}
+	mutex.Unlock()
 	fmt.Println("Client Disconnected : ", client.Id)
 }
 
@@ -227,7 +234,7 @@ func (client *ClientConnection) Read(atLeast int) []byte {
 }
 
 func (client *ClientConnection) Write(data []byte) (int, error) {
-	server := serverConnections[client.ServerName]
+	server := _serverConnections[client.ServerName]
 	if server == nil {
 		client.Close()
 		return 0, fmt.Errorf("Server not found")
@@ -256,7 +263,7 @@ func (client *ClientConnection) init() bool {
 		return false
 	}
 
-	server := serverConnections[serverName]
+	server := _serverConnections[serverName]
 	if server == nil {
 		client.Conn.Write([]byte("HTTP/1.1 404 Not Found\r\n\r\n"))
 		client.Close()
@@ -264,7 +271,9 @@ func (client *ClientConnection) init() bool {
 	}
 
 	client.ServerName = serverName
-	clientConnections[serverName][client.Id] = client.Conn
+	mutex.Lock()
+	_clientConnections[serverName][client.Id] = client.Conn
+	mutex.Unlock()
 	client.Write(buffer)
 	return true
 }
