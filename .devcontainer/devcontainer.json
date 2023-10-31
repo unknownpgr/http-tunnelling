@@ -9,7 +9,8 @@
       "extensions": [
         "GitHub.copilot",
         "streetsidesoftware.code-spell-checker",
-        "esbenp.prettier-vscode"
+        "esbenp.prettier-vscode",
+        "golang.go"
       ]
     }
   }
