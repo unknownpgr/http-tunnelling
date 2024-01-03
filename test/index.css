@@ -1,0 +1,17 @@
+.img-container img {
+  max-width: 60%;
+
+}
+
+.img-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  flex-direction: column;
+}
+
+.container{
+  max-width: 50rem;
+  margin: 0 auto;
+  padding: 0 1rem;
+}
